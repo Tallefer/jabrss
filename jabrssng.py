@@ -19,16 +19,7 @@
 import bisect, codecs, getopt, locale, logging, os, socket, sqlite3, string
 import sys, thread, threading, time, traceback, types
 
-from pyxmpp.all import JID, Message, Presence, RosterItem
-from pyxmpp.jabber.client import JabberClient
-from pyxmpp.jabber.clientstream import LegacyClientStream
-from pyxmpp.utils import to_utf8
-from pyxmpp.exceptions import *
-from pyxmpp.interface import implements
-from pyxmpp.interfaces import *
-
-import libxml2
-libxml2.debugMemory(1)
+from xmpplify import Element, JID, Stanza, XmppStream
 
 import parserss
 from parserss import RSS_Resource, RSS_Resource_id2url, RSS_Resource_simplify
@@ -36,8 +27,10 @@ from parserss import RSS_Resource_db, RSS_Resource_Cursor
 from parserss import UrlError
 
 
+logger = logging.getLogger("JabRSS")
+
 def log_message(*msg):
-    print(' '.join(map(lambda x: str(x), msg)))
+    logger.info(' '.join(map(lambda x: str(x), msg)))
 
 parserss.init(logmsg_func = log_message,
               dbsync_obj = thread.allocate_lock())
@@ -405,7 +398,7 @@ class DataStorage:
                 try:
                     storage.get_resource_by_id(res_id)
                 except:
-                    print 'caught exception loading resource', res_id, 'for new user'
+                    log_message('caught exception loading resource', res_id, 'for new user')
                     traceback.print_exc(file=sys.stdout)
 
             return user, jid_resource
@@ -439,7 +432,7 @@ class DataStorage:
         finally:
             del cursor
 
-        print 'user %s (id %d) deleted' % (user._jid, user._uid)
+        log_message('user %s (id %d) deleted' % (user._jid, user._uid))
         self.evict_user(user)
 
 
@@ -847,7 +840,7 @@ class DummyJabberUser(JabberUser):
     # @throws ValueError
     def add_resource(self, resource, seq_nr=None, db_cursor=None):
         res_id = resource.id()
-        print 'dummy adding res', res_id, len(self._res_ids)
+        log_message('dummy adding res', res_id, len(self._res_ids))
 
         if res_id not in self._res_ids:
             self._res_ids.append(res_id)
@@ -866,7 +859,7 @@ class DummyJabberUser(JabberUser):
     # @throws ValueError
     def remove_resource(self, resource, db_cursor=None):
         res_id = resource.id()
-        print 'dummy removing res', res_id, len(self._res_ids)
+        log_messsage('dummy removing res', res_id, len(self._res_ids))
 
         if len(self._res_ids) == 0:
             return
@@ -900,47 +893,167 @@ class DummyJabberUser(JabberUser):
 dummy_user = DummyJabberUser()
 
 
-class JabRSSHandler(object):
-    implements(IMessageHandlersProvider, IPresenceHandlersProvider)
-
-    def __init__(self, client, jid):
-        self._client = client
-        self.jid = jid
+class JabRSSStream(XmppStream):
+    def __init__(self, jid, host, password, port=5222):
+        self.jid, self._host, self._password, self._port = jid, host, password, port
         self._update_queue = []
         self._update_queue_cond = threading.Condition()
         RSS_Resource.schedule_update = self.schedule_update
 
-        self._shutdown = 0
-        self._shutdown_lock = threading.Lock()
+        self._roster_id = 0
+        self._sock, self._encoding = None, 'utf-8'
+        self._term, self._term_flag = threading.Event(), False
 
-    def get_stream(self):
-        return self._client.get_valid_stream()
+        handlers = {
+            ('iq', 'get') : self.iq_get,
+            ('iq', 'set') : self.iq_set,
+            ('iq', 'result') : self.iq_result,
+            ('iq', 'error') : self.iq_error,
+            ('message', 'normal') : self.message,
+            ('message', 'chat') : self.message,
+            ('presence', None) : self.presence_available,
+            ('presence', 'unavailable') : self.presence_unavailable,
+            ('presence', 'error') : self.presence_unavailable,
+            ('presence', 'subscribe') : self.presence_control,
+            ('presence', 'subscribed') : self.presence_control,
+            ('presence', 'unsubscribe') : self.presence_control,
+            ('presence', 'unsubscribed') : self.presence_control,
+            }
+        XmppStream.__init__(self, self.jid.domain(), handlers, self._encoding)
 
-    def get_message_handlers(self):
-        return [
-            ('chat', self.message),
-            ('normal', self.message),
-            ]
 
-    def get_presence_handlers(self):
-        return [
-            (None, self.presence_available),
-            ('unavailable', self.presence_unavailable),
-            ('error', self.presence_unavailable),
-            ('subscribe', self.presence_control),
-            ('subscribed', self.presence_control),
-            ('unsubscribe', self.presence_control),
-            ('unsubscribed', self.presence_control),
-            ]
+    def connect(self):
+        self._sock = socket.create_connection((self._host, self._port))
+        self._sock.settimeout(600)
+        XmppStream.connect(self)
+
+
+    def fd(self):
+        return self._sock
+
+    def send(self, data):
+        if self._sock != None:
+            logger.debug('>>> ' + repr(data))
+            self._sock.sendall(data)
+
+    def closed(self):
+        self._sock = None
+        storage.evict_all_users()
+
+    def shutdown(self):
+        if self._sock != None:
+            self._sock.shutdown(socket.SHUT_WR)
+
+
+    def terminate(self):
+        self._term_flag = True
+
+        self._update_queue_cond.acquire()
+        self._update_queue_cond.notifyAll()
+        self._update_queue_cond.release()
+        self._term.wait()
+
+    def terminated(self):
+        return self._term_flag
+
+
+    def stream_start(self, elem):
+        log_message('stream start')
+
+    def stream_features(self, elem):
+        iq = Stanza.Iq(type='get', id='a1')
+        query = iq.create_query('jabber:iq:auth')
+        query_username = Element('{jabber:iq:auth}username')
+        query_username.text = self.jid.user()
+        query.append(query_username)
+        query_resource = Element('{jabber:iq:auth}resource')
+        query_resource.text = self.jid.resource()
+        query.append(query_resource)
+        self.send(iq.asbytes(self._encoding))
+
+    def stream_error(self, elem):
+        log_message('stream error')
+        XmppStream.stream_error(self, elem)
+
+    def iq_get(self, iq):
+        log_message('iq get', iq.get_id())
+        query = iq.get_query()
+        if query:
+            log_message('iq get', query.tag)
+
+        reply = Stanza.Iq(id=iq.get_id(), type='error',
+                          from_=iq.get_to(), to=iq.get_from())
+        self.send(reply.asbytes(self._encoding))
+
+    def iq_set(self, iq):
+        log_message('iq set', iq.get_id())
+        query = iq.get_query()
+        if query:
+            if query.tag == '{jabber:iq:roster}query':
+                item = query.find('{jabber:iq:roster}item')
+                if item != None:
+                    self.roster_updated(item)
+                    reply = Stanza.Iq(id=iq.get_id(), type='result',
+                                      from_=iq.get_to(), to=iq.get_from())
+                    self.send(reply.asbytes(self._encoding))
+                    return
+            else:
+                log_message('iq set', query.tag)
+
+        reply = Stanza.Iq(id=iq.get_id(), type='error',
+                          from_=iq.get_to(), to=iq.get_from())
+        self.send(reply.asbytes(self._encoding))
+
+    def iq_result(self, iq):
+        if iq.get_id() == 'a1':
+            reply = Stanza.Iq(type='set', id='a2')
+            query = reply.create_query('jabber:iq:auth')
+            query_username = Element('{jabber:iq:auth}username')
+            query_username.text = self.jid.user()
+            query.append(query_username)
+            query_resource = Element('{jabber:iq:auth}resource')
+            query_resource.text = self.jid.resource()
+            query.append(query_resource)
+            query_password = Element('{jabber:iq:auth}password')
+            query_password.text = self._password
+            query.append(query_password)
+            self.send(reply.asbytes(self._encoding))
+        elif iq.get_id() == 'a2':
+            log_message('authenticated')
+            reply = Stanza.Iq(type='get', id='a3')
+            reply.create_query('jabber:iq:roster')
+            self.send(reply.asbytes(self._encoding))
+        elif iq.get_id() == 'a3':
+            log_message('roster retrieved')
+            query = iq.get_query()
+            self.roster_updated(query.getchildren())
+
+            reply = Stanza.Presence()
+            self.send(reply.asbytes(self._encoding))
+        else:
+            log_message('iq result', iq.get_id())
+            query = iq.get_query()
+            if query:
+                log_message('iq result', query.tag)
+
+    def iq_error(self, iq):
+        if iq.get_id() in ('a1', 'a2', 'a3'):
+            # we are unable to recover from these...
+            self._term_flag = True
+            self.disconnect()
+        else:
+            log_message('iq error', iq.get_id())
+            error = iq.get_error()
+            if error:
+                log_message('iq error', error.tag)
 
 
     def _process_help(self, stanza, user):
-        reply = Message(to_jid = stanza.get_from(),
-                        from_jid = stanza.get_to(),
-                        stanza_type = stanza.get_type(),
-                        subject = stanza.get_subject(),
-                        body = TEXT_HELP)
-        return reply
+        reply = Stanze.Message(to = stanza.get_from(),
+                               type = stanza.get_type(),
+                               subject = stanza.get_subject(),
+                               body = TEXT_HELP)
+        self.send(reply.asbytes(self._encoding))
 
     def _process_list(self, stanza, user):
         reply_body = []
@@ -963,12 +1076,11 @@ class JabRSSHandler(object):
         else:
             reply_body = 'Sorry, you are currently not subscribed to any RSS feeds.'
 
-        reply = Message(to_jid = stanza.get_from(),
-                        from_jid = stanza.get_to(),
-                        stanza_type = stanza.get_type(),
-                        subject = stanza.get_subject(),
-                        body = reply_body)
-        return reply
+        reply = Stanza.Message(to = stanza.get_from(),
+                               type = stanza.get_type(),
+                               subject = stanza.get_subject(),
+                               body = reply_body)
+        self.send(reply.asbytes(self._encoding))
 
     def _parse_format(self, args):
         format = 0
@@ -1037,12 +1149,11 @@ class JabRSSHandler(object):
         except:
             reply_body = 'Unknown error setting configuration option'
 
-        reply = Message(to_jid = stanza.get_from(),
-                        from_jid = stanza.get_to(),
-                        stanza_type = stanza.get_type(),
-                        subject = stanza.get_subject(),
-                        body = reply_body)
-        return reply
+        reply = Stanza.Message(to = stanza.get_from(),
+                               type = stanza.get_type(),
+                               subject = stanza.get_subject(),
+                               body = reply_body)
+        self.send(reply.asbytes(self._encoding))
 
 
     def _format_format_conf(self, format):
@@ -1095,12 +1206,11 @@ class JabRSSHandler(object):
         if size_limit:
             reply_body.append('The size of a headline message will be limited to about %d bytes' % (size_limit,))
 
-        reply = Message(to_jid = stanza.get_from(),
-                        from_jid = stanza.get_to(),
-                        stanza_type = stanza.get_type(),
-                        subject = stanza.get_subject(),
-                        body = '\n'.join(reply_body))
-        return reply
+        reply = Stanza.Message(to = stanza.get_from(),
+                               type = stanza.get_type(),
+                               subject = stanza.get_subject(),
+                               body = '\n'.join(reply_body))
+        self.send(reply.asbytes(self._encoding))
 
 
     def _process_statistics(self, stanza, user):
@@ -1127,12 +1237,11 @@ class JabRSSHandler(object):
         reply_body.append('RDF feeds used/total: %d/%d' %
                           (len(storage._resources) / 2, total_resources))
 
-        reply = Message(to_jid = stanza.get_from(),
-                        from_jid = stanza.get_to(),
-                        stanza_type = stanza.get_type(),
-                        subject = stanza.get_subject(),
-                        body = '\n'.join(reply_body))
-        return reply
+        reply = Stanza.Message(to = stanza.get_from(),
+                               type = stanza.get_type(),
+                               subject = stanza.get_subject(),
+                               body = '\n'.join(reply_body))
+        self.send(reply.asbytes(self._encoding))
 
 
     def _process_usage(self, stanza, user):
@@ -1159,16 +1268,15 @@ class JabRSSHandler(object):
 
             time_base += 7*24*60*60
 
-        reply = Message(to_jid = stanza.get_from(),
-                        from_jid = stanza.get_to(),
-                        stanza_type = stanza.get_type(),
-                        subject = stanza.get_subject(),
-                        body = '\n'.join(reply_body))
-        return reply
+        reply = Stanza.Message(to = stanza.get_from(),
+                               type = stanza.get_type(),
+                               subject = stanza.get_subject(),
+                               body = '\n'.join(reply_body))
+        self.send(reply.asbytes(self._encoding))
 
     def _process_subscribe(self, stanza, user, argstr):
         args = string.split(argstr)
-        reply, reply_body = [], None
+        reply_body = None
 
         for arg in args:
             try:
@@ -1181,40 +1289,34 @@ class JabRSSHandler(object):
 
                     new_items, headline_id = resource.get_headlines(0, db=main_res_db)
                     if new_items:
-                        self._send_headlines(self.get_stream(), user, resource,
-                                             new_items)
+                        self._send_headlines(user, resource, new_items)
                         user.update_headline(resource, headline_id, new_items)
                 finally:
                     resource.unlock()
 
-                print user.jid(), 'subscribed to', url
+                log_message(user.jid(), 'subscribed to', url)
                 reply_body = 'You have been subscribed to %s' % (url,)
             except UrlError, url_error:
-                print user.jid(), 'error (%s) subscribing to' % (url_error.args[0],), url
+                log_message(user.jid(), 'error (%s) subscribing to' % (url_error.args[0],), url)
                 reply_body = 'Error (%s) subscribing to %s' % (url_error.args[0], url)
             except ValueError:
-                print user.jid(), 'already subscribed to', url
+                log_message(user.jid(), 'already subscribed to', url)
                 reply_body = 'You are already subscribed to %s' % (url,)
             except:
-                print user.jid(), 'error subscribing to', url
+                log_message(user.jid(), 'error subscribing to', url)
                 traceback.print_exc(file=sys.stdout)
                 reply_body = 'For some reason you couldn\'t be subscribed to %s' % (url,)
 
             if reply_body:
-                reply.append(Message(to_jid = stanza.get_from(),
-                                     from_jid = stanza.get_to(),
-                                     stanza_type = stanza.get_type(),
-                                     subject = stanza.get_subject(),
-                                     body = reply_body))
-
-        if reply:
-            return reply
-        else:
-            return True
+                reply = Stanza.Message(to = stanza.get_from(),
+                                       type = stanza.get_type(),
+                                       subject = stanza.get_subject(),
+                                       body = reply_body)
+                self.send(reply.asbytes(self._encoding))
 
     def _process_unsubscribe(self, stanza, user, argstr):
         args = string.split(argstr)
-        reply, reply_body = [], None
+        reply_body = None
 
         for arg in args:
             url = arg.encode('ascii')
@@ -1227,7 +1329,7 @@ class JabRSSHandler(object):
                 finally:
                     resource.unlock()
 
-                print user.jid(), 'unsubscribed from', url
+                log_message(user.jid(), 'unsubscribed from', url)
                 reply_body = 'You have been unsubscribed from %s' % (url,)
             except KeyError:
                 reply_body = 'For some reason you couldn\'t be unsubscribed from %s' % (url,)
@@ -1235,20 +1337,15 @@ class JabRSSHandler(object):
                 reply_body = 'No need to unsubscribe, you weren\'t subscribed to %s anyway' % (url,)
 
             if reply_body:
-                reply.append(Message(to_jid = stanza.get_from(),
-                                     from_jid = stanza.get_to(),
-                                     stanza_type = stanza.get_type(),
-                                     subject = stanza.get_subject(),
-                                     body = reply_body))
-
-        if reply:
-            return reply
-        else:
-            return True
+                reply = Stanza.Message(to = stanza.get_from(),
+                                       type = stanza.get_type(),
+                                       subject = stanza.get_subject(),
+                                       body = reply_body)
+                self.send(reply.asbytes(self._encoding))
 
     def _process_info(self, stanza, user, argstr):
         args = string.split(argstr)
-        reply, reply_body = [], None
+        reply_body = None
 
         for arg in args:
             url = arg.encode('ascii')
@@ -1302,29 +1399,36 @@ class JabRSSHandler(object):
                 reply_body = 'No information available about %s' % (url,)
 
             if reply_body:
-                reply.append(Message(to_jid = stanza.get_from(),
-                                     from_jid = stanza.get_to(),
-                                     stanza_type = stanza.get_type(),
-                                     subject = stanza.get_subject(),
-                                     body = reply_body))
-
-        if reply:
-            return reply
-        else:
-            return True
+                reply = Stanza.Message(to = stanza.get_from(),
+                                       type = stanza.get_type(),
+                                       subject = stanza.get_subject(),
+                                       body = reply_body)
+                self.send(reply.asbytes(self._encoding))
 
 
-    def _remove_user(self, jid):
-        iq = RosterItem(JID(jid), 'remove').make_roster_push()
-        stream = self.get_stream()
-        if stream != None:
-            stream.send(iq)
+    def _remove_user(self, jid, send_unsubscribed=True):
+        self._roster_id += 1
+        iq = Stanza.Iq(type='set', id='r%d' % (self._roster_id,))
+        query = iq.create_query('jabber:iq:roster')
+        item = Element('{jabber:iq:roster}item')
+        item.set('jid', jid)
+        item.set('subscription', 'remove')
+        query.append(item)
+        self.send(iq.asbytes(self._encoding))
+
+        presence = Stanza.Presence(to = JID(jid), type = 'unsubscribe')
+        self.send(presence.asbytes(self._encoding))
+
+        if send_unsubscribed:
+            presence = Stanza.Presence(to = JID(jid), type = 'unsubscribed')
+            self.send(presence.asbytes(self._encoding))
+
 
     # delete all user information from database and evict user
     def _delete_user(self, jid):
         try:
             user, jid_resource = storage.get_new_user(jid, None)
-            print 'deleting user\'s %s subscriptions: %s' % (jid, repr(user.resources()))
+            log_message('deleting user\'s %s subscriptions: %s' % (jid, repr(user.resources())))
             for res_id in user.resources():
                 resource = storage.get_resource_by_id(res_id)
                 resource.lock()
@@ -1348,11 +1452,11 @@ class JabRSSHandler(object):
             return
 
         body = string.strip(body)
-        print 'message', typ, sender.as_unicode(), body
+        log_message('message', typ, sender.tostring(), body)
 
         if typ in ('normal', 'chat'):
             try:
-                user, jid_resource = storage.get_user(sender.as_unicode())
+                user, jid_resource = storage.get_user(sender.tostring())
                 unknown_msg = False
 
                 if body == 'help':
@@ -1378,35 +1482,32 @@ class JabRSSHandler(object):
                     # safe-guard against robot ping-pong
                     if user._unknown_msgs < 2:
                         user._unknown_msgs = user._unknown_msgs + 1
-                        reply = Message(to_jid = stanza.get_from(),
-                                        from_jid = stanza.get_to(),
-                                        stanza_type = stanza.get_type(),
-                                        subject = stanza.get_subject(),
-                                        body = 'Unknown command. Please refer to the documentation at http://dev.cmeerw.org/book/view/30')
-                        return reply
+                        reply = Stanza.Message(to = stanza.get_from(),
+                                               type = stanza.get_type(),
+                                               subject = stanza.get_subject(),
+                                               body = 'Unknown command. Please refer to the documentation at http://dev.cmeerw.org/book/view/30')
+                        self.send(reply.asbytes(self._encoding))
 
                 if not unknown_msg:
                     user._unknown_msgs = 0
             except KeyError:
                 traceback.print_exc(file=sys.stdout)
         elif typ == 'error':
-            print 'ignoring error message from', sender.as_unicode()
+            log_message('ignoring error message from', sender.tostring())
         else:
-            print 'ignoring unknown message type from', sender.as_unicode()
-
-        return True
+            log_message('ignoring unknown message type from', sender.tostring())
 
     def presence_available(self, stanza):
         sender, typ, status, show = (stanza.get_from(), stanza.get_type(),
                                      stanza.get_status(), stanza.get_show())
-        print 'presence', sender.as_unicode(), typ, show
+        log_message('presence', sender.tostring(), typ, show)
 
         try:
             presence = [None, 'chat', 'away', 'xa', 'dnd'].index(show)
         except ValueError:
             return
 
-        user, jid_resource = storage.get_new_user(sender.as_unicode(),
+        user, jid_resource = storage.get_new_user(sender.tostring(),
                                                   presence)
         if user.get_delivery_state(presence):
             subs = None
@@ -1425,12 +1526,11 @@ class JabRSSHandler(object):
 
                         new_items, headline_id = resource.get_headlines(headline_id, db=main_res_db)
                         if new_items:
-                            self._send_headlines(self.get_stream(), user,
-                                                 resource, new_items)
+                            self._send_headlines(user, resource, new_items)
 
                         redirect_url, redirect_seq = resource.redirect_info(main_res_db)
                         if redirect_url != None:
-                            print 'processing redirect to', redirect_url
+                            log_message('processing redirect to', redirect_url)
 
                             try:
                                 user.remove_resource(resource)
@@ -1453,58 +1553,58 @@ class JabRSSHandler(object):
                         break
                 finally:
                     resource.unlock()
-        return True
 
     def presence_unavailable(self, stanza):
         sender, typ, status, show = (stanza.get_from(), stanza.get_type(),
                                      stanza.get_status(), stanza.get_show())
-        print 'presence', sender.as_unicode(), typ, show
+        log_message('presence', sender.tostring(), typ, show)
         try:
-            user, jid_resource = storage.get_user(sender.as_unicode())
+            user, jid_resource = storage.get_user(sender.tostring())
             user.set_presence(jid_resource, -1)
             if user.presence() < 0:
-                print 'evicting user', user.jid()
+                log_message('evicting user', user.jid())
                 storage.evict_user(user)
         except KeyError:
             pass
 
-        return True
-
     def presence_control(self, stanza):
         reply = []
         sender, typ = stanza.get_from(), stanza.get_type()
-        print 'presence_control', sender.as_unicode(), typ
+        log_message('presence_control', sender.tostring(), typ)
 
         if typ == 'subscribe':
             msg_text = TEXT_WELCOME
             try:
-                storage.get_user(sender.as_unicode())
+                storage.get_user(sender.tostring())
             except KeyError:
                 msg_text += TEXT_NEWUSER
 
-            reply.append(Message(to_jid = stanza.get_from(),
-                                 from_jid = stanza.get_to(),
-                                 stanza_type = 'normal',
-                                 body = msg_text))
-            reply.append(Presence(to_jid = stanza.get_from(),
-                                  from_jid = stanza.get_to(),
-                                  stanza_type = 'subscribe'))
-        if typ == 'unsubscribed':
-            self._delete_user(sender.as_unicode())
-            self._remove_user(sender.as_unicode())
+            msg =  Stanza.Message(to = stanza.get_from(),
+                                  type = 'normal',
+                                  body = msg_text)
+            self.send(msg.asbytes(self._encoding))
 
-        reply.append(stanza.make_accept_response())
-        return reply
+            reply = Stanza.Presence(to = stanza.get_from(),
+                                    type = 'subscribed')
+            self.send(reply.asbytes(self._encoding))
+
+            subscr = Stanza.Presence(to = stanza.get_from(),
+                                     type = 'subscribe')
+            self.send(subscr.asbytes(self._encoding))
+        if typ == 'unsubscribed':
+            self._delete_user(sender.tostring())
+            self._remove_user(sender.tostring(), False)
+
 
     def roster_updated(self, item):
         if type(item) in (types.ListType, types.TupleType):
             subscribers = {}
             for elem in item:
-                jid = elem.jid.as_unicode()
-                if elem.subscription == 'both':
+                jid, subscription = elem.get('jid'), elem.get('subscription')
+                if subscription == 'both':
                     subscribers[jid.lower()] = True
                 else:
-                    print 'subscription for user "%s" is "%s" (!= "both")' % (jid, elem.subscription)
+                    log_message('subscription for user "%s" is "%s" (!= "both")' % (jid, subscription))
                     self._remove_user(jid)
 
             cursor = Cursor(db)
@@ -1520,7 +1620,7 @@ class JabRSSHandler(object):
             del cursor
 
             for username in delete_users:
-                print 'user "%s" in database, but not subscribed to the service' % (username,)
+                log_message('user "%s" in database, but not subscribed to the service' % (username,))
                 self._delete_user(username)
 
 
@@ -1550,20 +1650,12 @@ class JabRSSHandler(object):
             del cursor
 
             for username in delete_users:
-                print 'user "%s" hasn\'t used the service for more than 40 weeks' % (username,)
+                log_message('user "%s" hasn\'t used the service for more than 40 weeks' % (username,))
                 self._remove_user(username)
                 self._delete_user(username)
         else:
-            if item.name:
-                name = item.name
-            else:
-                name = ''
-                print ('%s "%s" subscription=%s groups=%s'
-                       % (unicode(item.jid), name, item.subscription,
-                          ','.join(item.groups)) )
-
-    def disconnected(self):
-        storage.evict_all_users()
+            jid, subscription = item.get('jid'), item.get('subscription')
+            log_message('roster updated', jid, subscription)
 
     def _format_header(self, title, url, res_url, format):
         if url == '':
@@ -1581,8 +1673,8 @@ class JabRSSHandler(object):
 
         return ''
 
-    def _send_headlines(self, stream, user, resource, items, not_stored=False):
-        print 'sending', user.jid(), resource.url()
+    def _send_headlines(self, user, resource, items, not_stored=False):
+        log_message('sending', user.jid(), resource.url())
         message_type = user.get_message_type()
         subject_format = user.get_subject_format()
         header_format = user.get_header_format()
@@ -1625,31 +1717,32 @@ class JabRSSHandler(object):
                         body = []
                         msgs.append(body)
                 except ValueError:
-                    print 'trying to unpack tuple of wrong size', repr(item)
+                    log_message('trying to unpack tuple of wrong size', repr(item))
 
             mt = ('normal', 'chat')[message_type != 0]
             for body in msgs:
                 if body:
-                    msg = Message(to_jid = JID(user.jid()),
-                                  from_jid = self.jid,
-                                  stanza_type = mt,
-                                  subject = subject_text,
-                                  body = ''.join(body))
-                    stream.send(msg)
+                    msg = Stanza.Message(to = JID(user.jid()),
+                                         type = mt,
+                                         subject = subject_text,
+                                         body = ''.join(body))
+                    self.send(msg.asbytes(self._encoding))
 
         elif message_type == 1:         # headline
             if not not_stored and (len(items) > user.get_store_messages()):
-                msg = Message(to_jid = JID(user.jid()),
-                              from_jid = self.jid,
-                              stanza_type = 'headline',
-                              subject = subject_text,
-                              body = '%d headlines suppressed' % (len(items) - user.get_store_messages(),))
-                oob_ext = msg.xmlnode.newChild(None, 'x', None)
-                x_oob_ns = oob_ext.newNs('jabber:x:oob', None)
-                oob_ext.setNs(x_oob_ns)
-                oob_ext.newChild(None, 'url', to_utf8(channel_info.link))
-                oob_ext.newChild(None, 'desc', to_utf8(channel_info.descr))
-                stream.send(msg)
+                msg = Stanza.Message(to = JID(user.jid()),
+                                     type = 'headline',
+                                     subject = subject_text,
+                                     body = '%d headlines suppressed' % (len(items) - user.get_store_messages(),))
+                oob_ext = msg.create_x('jabber:x:oob')
+                oob_ext_url = Element('{jabber:x:oob}url')
+                oob_ext_url.text = channel_info.link
+                oob_ext.append(oob_ext_url)
+
+                oob_ext_desc = Element('{jabber:x:oob}desc')
+                oob_ext_desc.text = channel_info.descr
+                oob_ext.append(oob_ext_desc)
+                self.send(msg.asbytes(self._encoding))
 
                 items = items[-user.get_store_messages():]
 
@@ -1661,23 +1754,25 @@ class JabRSSHandler(object):
                 else:
                     description = title
 
-                msg = Message(to_jid = JID(user.jid()),
-                              from_jid = self.jid,
-                              stanza_type = 'headline',
-                              subject = subject_text,
-                              body = description[:user.get_size_limit()])
-                oob_ext = msg.xmlnode.newChild(None, 'x', None)
-                x_oob_ns = oob_ext.newNs('jabber:x:oob', None)
-                oob_ext.setNs(x_oob_ns)
-                oob_ext.newChild(None, 'url', to_utf8(link))
-                oob_ext.newChild(None, 'desc', to_utf8(title))
-                stream.send(msg)
+                msg = Stanza.Message(to = JID(user.jid()),
+                                     type = 'headline',
+                                     subject = subject_text,
+                                     body = description[:user.get_size_limit()])
+                oob_ext = msg.create_x('jabber:x:oob')
+                oob_ext_url = Element('{jabber:x:oob}url')
+                oob_ext_url.text = link
+                oob_ext.append(oob_ext_url)
+
+                oob_ext_desc = Element('{jabber:x:oob}desc')
+                oob_ext_desc.text = title
+                oob_ext.append(oob_ext_desc)
+                self.send(msg.asbytes(self._encoding))
 
 
     def schedule_update(self, resource):
         self._update_queue_cond.acquire()
         next_update = resource.next_update()
-        print 'scheduling', resource.url(), time.asctime(time.localtime(next_update))
+        log_message('scheduling', resource.url(), time.asctime(time.localtime(next_update)))
 
         bisect.insort(self._update_queue, (next_update, resource))
         if self._update_queue[0] == (next_update, resource):
@@ -1687,23 +1782,22 @@ class JabRSSHandler(object):
 
     def run(self):
         db, res_db = None, None
-        self._shutdown_lock.acquire()
 
         try:
             time.sleep(20)
-            print 'starting RSS/RDF updater'
+            log_message('starting RSS/RDF updater')
             db = get_db()
             res_db = RSS_Resource_db()
             storage._redirect_db = db
 
             self._update_queue_cond.acquire()
-            while not self._shutdown:
+            while not self._term_flag:
                 if self._update_queue:
                     timeout = self._update_queue[0][0] - int(time.time())
 
                     if timeout > 3:
                         if timeout > 300:
-                            print 'updater waiting for %d seconds' % (timeout,)
+                            log_message('updater waiting for %d seconds' % (timeout,))
                         self._update_queue_cond.wait(timeout)
                     else:
                         resource = self._update_queue[0][1]
@@ -1713,29 +1807,21 @@ class JabRSSHandler(object):
                         self._update_resource(resource, db, res_db)
                         self._update_queue_cond.acquire()
                 else:
-                    print 'updater queue empty...'
+                    log_message('updater queue empty...')
                     self._update_queue_cond.wait()
 
             self._update_queue_cond.release()
         except:
-            print 'updater thread caught exception...'
+            log_message('updater thread caught exception...')
             traceback.print_exc(file=sys.stdout)
             sys.exit(1)
 
-        print 'updater shutting down...'
+        log_message('updater shutting down...')
         del db
         del storage._redirect_db
         del res_db
 
-        self._shutdown_lock.release()
-
-    def shutdown(self):
-        self._shutdown = True
-
-        self._update_queue_cond.acquire()
-        self._update_queue_cond.notifyAll()
-        self._update_queue_cond.release()
-        self._shutdown_lock.acquire()
+        self._term.set()
 
 
     def _update_resource(self, resource, db, res_db=None):
@@ -1772,7 +1858,7 @@ class JabRSSHandler(object):
             if used:
                 resource.unlock(); need_unlock = False
                 try:
-                    print time.asctime(), 'updating', resource.url()
+                    log_message(time.asctime(), 'updating', resource.url())
                     new_items, next_item_id, redirect_resource, redirect_seq, redirects = resource.update(res_db, redirect_cb = storage._redirect_cb)
 
                     if len(new_items) > 0:
@@ -1785,7 +1871,6 @@ class JabRSSHandler(object):
 
                     if len(new_items) > 0 or redirect_resource != None:
                         deliver_users = []
-                        stream = self.get_stream()
                         cursor = Cursor(db)
                         uids = storage.get_resource_uids(resource, cursor)
                         cursor.begin()
@@ -1806,7 +1891,7 @@ class JabRSSHandler(object):
                                         pass
 
 
-                                if len(new_items) and user.get_delivery_state() and stream != None:
+                                if len(new_items) and user.get_delivery_state():
                                     if redirect_resource == None:
                                         user.update_headline(resource,
                                                              next_item_id,
@@ -1842,10 +1927,10 @@ class JabRSSHandler(object):
                             redirect_resource.unlock(); redirect_unlock = False
 
                         for user in deliver_users:
-                            self._send_headlines(stream, user,
-                                                 resource, new_items, True)
+                            self._send_headlines(user, resource, new_items,
+                                                 True)
                 except:
-                    print 'exception caught updating', resource.url()
+                    log_message('exception caught updating', resource.url())
                     traceback.print_exc(file=sys.stdout)
 
                 if need_unlock:
@@ -1860,7 +1945,6 @@ class JabRSSHandler(object):
             if need_unlock:
                 resource.unlock(); need_unlock = False
 
-        stream = self.get_stream()
         for resource, new_items, next_item_id in redirects:
             deliver_users = []
 
@@ -1869,7 +1953,7 @@ class JabRSSHandler(object):
             cursor = Cursor(db)
             cursor.begin()
             try:
-                print 'processing updated resource', resource.url()
+                log_message('processing updated resource', resource.url())
                 try:
                     dummy_user.remove_resource(resource, cursor)
                 except ValueError:
@@ -1880,7 +1964,7 @@ class JabRSSHandler(object):
                     try:
                         user = storage.get_user_by_id(uid)
 
-                        if user.get_delivery_state() and stream != None:
+                        if user.get_delivery_state():
                             headline_id = user.headline_id(resource, cursor)
                             if headline_id < next_item_id:
                                 user.update_headline(resource,
@@ -1898,80 +1982,10 @@ class JabRSSHandler(object):
                     resource.unlock(); need_unlock = False
 
             for user in deliver_users:
-                self._send_headlines(stream, user,
-                                     resource, new_items, True)
+                self._send_headlines(user, resource, new_items, True)
 
 
-# temporary bug fix for PyXMPP bug #37
-class MyLegacyClientStream(LegacyClientStream):
-    def __init__(self, jid, password = None, server = None, port = 5222,
-                 auth_methods = ("sasl:DIGEST-MD5", "digest"),
-                 tls_settings = None, keepalive = 0, owner = None):
-        LegacyClientStream.__init__(self, jid, password, server, port,
-                                    auth_methods, tls_settings, keepalive,
-                                    owner)
-
-    def _write_raw(self, data):
-        logging.getLogger("pyxmpp.Stream.out").debug("OUT: %r",data)
-        try:
-            if self.socket:
-                self.socket.sendall(data)
-        except (IOError,OSError,socket.error),e:
-            raise FatalStreamError("IO Error: "+str(e))
-
-
-class Client(JabberClient):
-    def __init__(self, jid, password, host=None):
-        # if bare JID is provided add a resource -- it is required
-        if not jid.resource:
-            jid = JID(jid.node, jid.domain, 'JabRSS')
-
-        JabberClient.__init__(self, jid, password, host,
-                              disco_name='JabRSS', disco_type='bot',
-                              auth_methods=['sasl:PLAIN', 'plain'])
-        self.stream_class = MyLegacyClientStream
-
-        self._disconnect = False
-        self._state = ''
-        self._session = JabRSSHandler(self, jid)
-        thread.start_new_thread(self._session.run, ())
-
-        # add the separate components
-        self.interface_providers = [ self._session, ]
-
-    def get_session(self):
-        return self._session
-
-    def get_valid_stream(self):
-        if self._state in ('authorized',):
-            return self.get_stream()
-        else:
-            return None
-
-    def disconnect(self):
-        self._disconnect = True
-        JabberClient.disconnect(self)
-
-    def disconnected(self):
-        return self._disconnect
-
-    def shutdown(self):
-        self._session.shutdown()
-
-    def stream_state_changed(self, state, arg):
-        self._state = state
-        print 'State changed: %s %r' % (state, arg)
-        if state == 'disconnected':
-            self._session.disconnected()
-
-    def roster_updated(self, item=None):
-        if not item:
-            self._session.roster_updated(self.roster.get_items())
-        else:
-            self._session.roster_updated(item)
-
-
-def console_handler(clt):
+def console_handler(bot):
     db = get_db()
 
     try:
@@ -1981,39 +1995,37 @@ def console_handler(clt):
 
             if s == '':
                 pass
-            elif s == 'debug memory':
-                print libxml2.debugMemory(1)
             elif s == 'debug locks':
                 # show all locked objects
-                print 'db_sync', db_sync.locked()
-                print 'storage._users_sync', storage._users_sync.locked()
-                print 'storage._resources_sync', storage._resources_sync.locked()
+                log_message('db_sync', db_sync.locked())
+                log_message('storage._users_sync', storage._users_sync.locked())
+                log_message('storage._resources_sync', storage._resources_sync.locked())
 
-                print 'RSS_Resource._db_sync', RSS_Resource._db_sync.locked()
+                log_message('RSS_Resource._db_sync', RSS_Resource._db_sync.locked())
                 for res in storage._resources.values():
                     if res._lock.locked():
-                        print 'resource %s' % (res._url,)
+                        log_message('resource %s' % (res._url,))
 
-                print 'done dumping locked objects'
+                log_message('done dumping locked objects')
             elif s == 'debug resources':
                 resources = storage._resources.keys()
                 resources.sort()
-                print repr(resources)
+                log_message(repr(resources))
             elif s == 'debug users':
                 users = storage._users.keys()
                 users.sort()
-                print repr(users)
+                log_message(repr(users))
             elif s.startswith('dump user '):
                 try:
                     user, resource = storage.get_user(s[10:].strip())
 
-                    print 'jid: %s, uid: %d' % (repr(user.jid()), user.uid())
-                    print 'resources: %s' % (repr(user._jid_resources.items()),)
-                    print 'presence: %d' % (user.presence(),)
-                    print 'delivery state: %d' % (user.get_delivery_state(),)
-                    print 'statistics: %s' % (repr(user.get_statistics()),)
+                    log_message('jid: %s, uid: %d' % (repr(user.jid()), user.uid()))
+                    log_message('resources: %s' % (repr(user._jid_resources.items()),))
+                    log_message('presence: %d' % (user.presence(),))
+                    log_message('delivery state: %d' % (user.get_delivery_state(),))
+                    log_message('statistics: %s' % (repr(user.get_statistics()),))
                 except KeyError:
-                    print 'user not online'
+                    log_message('user not online')
             elif s == 'statistics':
                 cursor = Cursor(db)
 
@@ -2032,23 +2044,24 @@ def console_handler(clt):
                 finally:
                     del cursor
 
-                print 'Users online/total: %d/%d' % (len(storage._users) / 2,
-                                                     total_users)
-                print 'RDF feeds used/total: %d/%d' % (len(storage._resources) / 2, total_resources)
+                log_message('Users online/total: %d/%d' % (len(storage._users) / 2,
+                                                           total_users))
+                log_message('RDF feeds used/total: %d/%d' % (len(storage._resources) / 2, total_resources))
 
             elif s == 'shutdown':
                 break
             else:
-                print 'Unknown command \'%s\'' % (s,)
+                log_message('Unknown command \'%s\'' % (s,))
 
     except EOFError:
         pass
 
     # initiate a clean shutdown
-    print 'JabRSS shutting down...'
+    log_message('JabRSS shutting down...')
     del db
 
-    clt.disconnect()
+    bot.terminate()
+    bot.disconnect()
 
 
 locale.setlocale(locale.LC_CTYPE, '')
@@ -2064,51 +2077,40 @@ logger.addHandler(logging.StreamHandler())
 #logger.setLevel(logging.DEBUG)
 logger.setLevel(logging.INFO)
 
-c = Client(JID(JABBER_USER + '@' + JABBER_SERVER), JABBER_PASSWORD, JABBER_HOST)
-thread.start_new_thread(console_handler, (c,))
+bot = JabRSSStream(JID(JABBER_USER + '@' + JABBER_SERVER), JABBER_HOST,
+                 JABBER_PASSWORD)
+thread.start_new_thread(bot.run, ())
+thread.start_new_thread(console_handler, (bot,))
 
 
 last_attempt, last_idled = 0, 0
-while not c.disconnected():
+while not bot.terminated():
     if last_attempt != 0:
         delay = 15
         if int(time.time()) - last_attempt < 30:
             delay += 45
-        print 'waiting for next connection attempt in', delay, 'seconds'
+        log_message('waiting for next connection attempt in', delay, 'seconds')
         time.sleep(delay)
 
     last_attempt = int(time.time())
     try:
-        c.connect()
+        bot.connect()
     except socket.error:
         continue
 
     last_attempt = int(time.time())
     try:
         while True:
-            stream = c.get_stream()
-            if stream:
-                act = stream.loop_iter(60)
-                if not act or (time.time() - last_idled > 60):
-                    last_idled = int(time.time())
-                    stream.idle()
-            else:
+            data = bot.fd().recv(4096)
+            logger.debug('<<< ' + repr(data))
+            if len(data) == 0:
+                bot.close()
                 break
-    except LegacyAuthenticationError:
-        print 'legacay authenticaton error'
-        c.disconnect()
-        break
-    except StreamAuthenticationError:
-        print 'stream authenticaton error'
-        c.disconnect()
-        break
-    except StreamError:
-        print 'stream error'
+
+            bot.feed(data)
     except KeyboardInterrupt:
-        print 'disconnecting...'
-        c.disconnect()
         break
 
 
-print 'exiting...'
-c.shutdown()
+log_message('exiting...')
+bot.terminate()
