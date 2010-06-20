@@ -937,12 +937,18 @@ class JabRSSStream(XmppStream):
             self._sock.sendall(data)
 
     def closed(self):
-        self._sock = None
+        log_message('stream closed')
         storage.evict_all_users()
+        self._sock = None
 
     def shutdown(self):
+        log_message('stream shutdown')
+        storage.evict_all_users()
         if self._sock != None:
-            self._sock.shutdown(socket.SHUT_WR)
+            try:
+                self._sock.shutdown(socket.SHUT_WR)
+            except socket.error:
+                pass
 
 
     def terminate(self):
@@ -2108,9 +2114,20 @@ while not bot.terminated():
                 break
 
             bot.feed(data)
+    except socket.error:
+        log_message('socket error')
+    except SyntaxError:
+        log_message('syntax error')
     except KeyboardInterrupt:
-        break
+        bot.terminate()
 
+    try:
+        bot.disconnect()
+    except:
+        pass
+    try:
+        bot.close()
+    except:
+        pass
 
 log_message('exiting...')
-bot.terminate()
