@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import threading
+import re, threading
 
 from xml.etree.cElementTree import Element, TreeBuilder, XMLTreeBuilder
 
@@ -11,6 +11,7 @@ __all__ = [
     'XmppStream',
 ]
 
+_evil_characters = re.compile(r"[\000-\010\013\014\016-\037]", re.UNICODE)
 _namespace_map = {
     "http://www.w3.org/XML/1998/namespace": "xml",
 }
@@ -134,7 +135,7 @@ def tobytes(node, encoding='utf-8'):
             return b''.join(self._data)
 
         def write(self, data):
-            self._data.append(data.encode(self._encoding))
+            self._data.append(_evil_characters.sub(' ', data).encode(self._encoding))
 
     fobj = writer(encoding)
     write_xml(node, fobj)

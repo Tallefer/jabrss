@@ -6,7 +6,7 @@ from xmpplify import Element, JID, Stanza, XmppStream
 
 class EchoBot(XmppStream):
     def __init__(self, jid, host, password, port=5222):
-        self._jid, self._password = jid, password
+        self._jid, self._host, self._password, self._port = jid, host, password, port
         self._sock = socket.create_connection((host, port))
         self._encoding = 'utf-8'
         self._closed = threading.Event()
@@ -28,18 +28,27 @@ class EchoBot(XmppStream):
             }
         XmppStream.__init__(self, self._jid.domain(), handlers, self._encoding)
 
+
+    def connect(self):
+        self._sock = socket.create_connection((self._host, self._port))
+        XmppStream.connect(self)
+
+
     def fd(self):
         return self._sock
 
     def send(self, data):
         self._sock.sendall(data)
 
+    def closed(self):
+        self._closed.set()
+
     def shutdown(self):
         if not self._closed.is_set():
             try:
                 self._sock.shutdown(socket.SHUT_WR)
-            finally:
-                self._closed.set()
+            except socket.error:
+                pass
 
     def wait(self):
         self._closed.wait()
@@ -138,17 +147,18 @@ server = raw_input('server: ')
 password = raw_input('password: ')
 
 bot = EchoBot(jid, server, password)
+bot.connect()
 
-try:
-    while True:
+while True:
+    try:
         data = bot.fd().recv(4096)
         if len(data) == 0:
             bot.close()
             break
 
         bot.feed(data)
-except KeyboardInterrupt:
-    print('shutting down')
+    except KeyboardInterrupt:
+        print('shutting down')
+        bot.disconnect()
 
-bot.disconnect()
 bot.wait()
