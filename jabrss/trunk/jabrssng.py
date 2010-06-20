@@ -30,7 +30,7 @@ from parserss import UrlError
 logger = logging.getLogger("JabRSS")
 
 def log_message(*msg):
-    logger.info(' '.join(map(lambda x: str(x), msg)))
+    logger.info(u' '.join(map(lambda x: unicode(x), msg)))
 
 parserss.init(logmsg_func = log_message,
               dbsync_obj = thread.allocate_lock())
@@ -859,7 +859,7 @@ class DummyJabberUser(JabberUser):
     # @throws ValueError
     def remove_resource(self, resource, db_cursor=None):
         res_id = resource.id()
-        log_messsage('dummy removing res', res_id, len(self._res_ids))
+        log_message('dummy removing res', res_id, len(self._res_ids))
 
         if len(self._res_ids) == 0:
             return
