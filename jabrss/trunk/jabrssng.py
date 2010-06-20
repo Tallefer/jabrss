@@ -1106,7 +1106,7 @@ class JabRSSStream(XmppStream):
 
 
     def _process_help(self, stanza, user):
-        reply = Stanze.Message(to = stanza.get_from(),
+        reply = Stanza.Message(to = stanza.get_from(),
                                type = stanza.get_type(),
                                subject = stanza.get_subject(),
                                body = TEXT_HELP)
