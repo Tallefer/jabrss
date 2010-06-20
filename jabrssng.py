@@ -16,10 +16,10 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
-import bisect, codecs, getopt, locale, logging, os, socket, sqlite3, string
-import sys, thread, threading, time, traceback, types
+import base64, bisect, codecs, getopt, locale, logging, os, socket, sqlite3
+import string, sys, thread, threading, time, traceback, types
 
-from xmpplify import Element, JID, Stanza, XmppStream
+from xmpplify import tobytes, Element, JID, Stanza, XmppStream
 
 import parserss
 from parserss import RSS_Resource, RSS_Resource_id2url, RSS_Resource_simplify
@@ -900,7 +900,7 @@ class JabRSSStream(XmppStream):
         self._update_queue_cond = threading.Condition()
         RSS_Resource.schedule_update = self.schedule_update
 
-        self._roster_id = 0
+        self._roster_id, self._authenticated = 0, False
         self._sock, self._encoding = None, 'utf-8'
         self._term, self._term_flag = threading.Event(), False
 
@@ -924,6 +924,8 @@ class JabRSSStream(XmppStream):
 
     def connect(self):
         self._sock = socket.create_connection((self._host, self._port))
+        self._authenticated = False
+        log_message('connected to', self._sock.getpeername())
         self._sock.settimeout(600)
         XmppStream.connect(self)
 
@@ -939,7 +941,7 @@ class JabRSSStream(XmppStream):
     def closed(self):
         log_message('stream closed')
         storage.evict_all_users()
-        self._sock = None
+        self._sock, self._authenticated = None, False
 
     def shutdown(self):
         log_message('stream shutdown')
@@ -967,19 +969,54 @@ class JabRSSStream(XmppStream):
         log_message('stream start')
 
     def stream_features(self, elem):
-        iq = Stanza.Iq(type='get', id='a1')
-        query = iq.create_query('jabber:iq:auth')
-        query_username = Element('{jabber:iq:auth}username')
-        query_username.text = self.jid.user()
-        query.append(query_username)
-        query_resource = Element('{jabber:iq:auth}resource')
-        query_resource.text = self.jid.resource()
-        query.append(query_resource)
-        self.send(iq.asbytes(self._encoding))
+        log_message('stream features')
+
+        if self._authenticated:
+            iq = Stanza.Iq(type='set', id='b1')
+            bind = Element('{urn:ietf:params:xml:ns:xmpp-bind}bind')
+            resource = Element('{urn:ietf:params:xml:ns:xmpp-bind}resource')
+            resource.text = self.jid.resource()
+            bind.append(resource)
+            iq.xmlnode().append(bind)
+            self.send(iq.asbytes(self._encoding))
+        else:
+            mechanisms = [mech.text for mech in elem.findall('{urn:ietf:params:xml:ns:xmpp-sasl}mechanisms/{urn:ietf:params:xml:ns:xmpp-sasl}mechanism')]
+
+            if 'PLAIN' in mechanisms:
+                # try SASL PLAIN authentication
+                auth = Element('{urn:ietf:params:xml:ns:xmpp-sasl}auth')
+                auth.set('mechanism', 'PLAIN')
+                auth.text = base64.encodestring(('\x00%s\x00%s' % (self.jid.user(), self._password)).encode('utf-8')).decode('ascii').strip()
+                self.send(tobytes(auth, self._encoding))
+            else:
+                iq = Stanza.Iq(type='get', id='a1')
+                query = iq.create_query('jabber:iq:auth')
+                query_username = Element('{jabber:iq:auth}username')
+                query_username.text = self.jid.user()
+                query.append(query_username)
+                query_resource = Element('{jabber:iq:auth}resource')
+                query_resource.text = self.jid.resource()
+                query.append(query_resource)
+                self.send(iq.asbytes(self._encoding))
 
     def stream_error(self, elem):
         log_message('stream error')
         XmppStream.stream_error(self, elem)
+
+    def stream_end(self, elem):
+        self._authenticated = False
+        XmppStream.stream_end(self, elem)
+
+    def sasl_failure(self, elem):
+        # we are unable to recover from these...
+        self._term_flag = True
+        self.disconnect()
+
+    def sasl_success(self, elem):
+        log_message('authenticated')
+        self._authenticated = True
+        XmppStream.connect(self)
+
 
     def iq_get(self, iq):
         log_message('iq get', iq.get_id())
@@ -1026,6 +1063,8 @@ class JabRSSStream(XmppStream):
             self.send(reply.asbytes(self._encoding))
         elif iq.get_id() == 'a2':
             log_message('authenticated')
+            self._authenticated = True
+
             reply = Stanza.Iq(type='get', id='a3')
             reply.create_query('jabber:iq:roster')
             self.send(reply.asbytes(self._encoding))
@@ -1036,6 +1075,15 @@ class JabRSSStream(XmppStream):
 
             reply = Stanza.Presence()
             self.send(reply.asbytes(self._encoding))
+        elif iq.get_id() == 'b1':
+            reply = Stanza.Iq(type='set', id='s1')
+            session = Element('{urn:ietf:params:xml:ns:xmpp-session}session')
+            reply.xmlnode().append(session)
+            self.send(reply.asbytes(self._encoding))
+        elif iq.get_id() == 's1':
+            reply = Stanza.Iq(type='get', id='a3')
+            reply.create_query('jabber:iq:roster')
+            self.send(reply.asbytes(self._encoding))
         else:
             log_message('iq result', iq.get_id())
             query = iq.get_query()
@@ -1043,7 +1091,7 @@ class JabRSSStream(XmppStream):
                 log_message('iq result', query.tag)
 
     def iq_error(self, iq):
-        if iq.get_id() in ('a1', 'a2', 'a3'):
+        if iq.get_id() in ('a1', 'a2', 'a3', 'b1', 's1'):
             # we are unable to recover from these...
             self._term_flag = True
             self.disconnect()
@@ -1052,6 +1100,9 @@ class JabRSSStream(XmppStream):
             error = iq.get_error()
             if error:
                 log_message('iq error', error.tag)
+
+    def unhandled_stanza(self, stanza):
+        log_message('unhandled stanza', stanza.tag())
 
 
     def _process_help(self, stanza, user):
@@ -2083,8 +2134,8 @@ logger.addHandler(logging.StreamHandler())
 #logger.setLevel(logging.DEBUG)
 logger.setLevel(logging.INFO)
 
-bot = JabRSSStream(JID(JABBER_USER + '@' + JABBER_SERVER), JABBER_HOST,
-                 JABBER_PASSWORD)
+bot = JabRSSStream(JID('%s@%s/%s' % (JABBER_USER, JABBER_SERVER, 'JabRSS')),
+                   JABBER_HOST, JABBER_PASSWORD)
 thread.start_new_thread(bot.run, ())
 thread.start_new_thread(console_handler, (bot,))
 
