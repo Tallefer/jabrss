@@ -5,6 +5,7 @@ from xml.etree.cElementTree import Element, TreeBuilder, XMLTreeBuilder
 
 
 __all__ = [
+    'tobytes',
     'Element',
     'JID',
     'Stanza',
@@ -33,15 +34,15 @@ class Synced_Invoke:
             self._lock.release()
 
         while True:
+            need_cleanup = True
             try:
                 fn(*args)
-            except:
-                self._lock.acquire()
-                try:
+                need_cleanup = False
+            finally:
+                if need_cleanup:
+                    self._lock.acquire()
                     del self._queue[:]
                     self._flag = False
-                    raise
-                finally:
                     self._lock.release()
 
             self._lock.acquire()
@@ -422,6 +423,13 @@ class XmppHandler:
                     self._stream.stream_error(elem)
                 else:
                     assert False, 'unknown stream element'
+            elif ns == 'urn:ietf:params:xml:ns:xmpp-sasl':
+                if tag == 'challenge':
+                    self._stream.sasl_challenge(elem)
+                elif tag == 'failure':
+                    self._stream.sasl_failure(elem)
+                elif tag == 'success':
+                    self._stream.sasl_success(elem)
             else:
                 assert False, 'unknown top-level tag'
         else:
@@ -453,8 +461,11 @@ class XmppStream:
                 break
 
         if handler == None:
-            self.unknown_stanza(stanza)
+            self.unhandled_stanza(stanza)
 
+
+    def closed(self):
+        pass
 
     def connect(self):
         self._synced_feeder = Synced_Invoke()
@@ -481,19 +492,29 @@ class XmppStream:
         self.disconnect()
         self._tb = None
 
+
+    def sasl_challenge(self, elem):
+        pass
+
+    def sasl_failure(self, elem):
+        pass
+
+    def sasl_success(self, elem):
+        pass
+
+
     def send(self, data):
         assert False, 'send method not implemented'
 
     def shutdown(self):
         assert False, 'shutdown method not implemented'
 
-    def unknown_stanza(self, stanza):
-        assert False, 'unknown stanza received'
+    def unhandled_stanza(self, stanza):
+        pass
 
 
     def feed(self, data):
-        cdata = data.decode(self._encoding)
-        self._synced_feeder(self._tb.feed, (cdata,))
+        self._synced_feeder(self._tb.feed, (data,))
 
     def close(self):
         if self._tb != None:
