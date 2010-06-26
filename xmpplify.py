@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import re, threading
+import base64, re, threading
 
 from xml.etree.cElementTree import Element, TreeBuilder, XMLTreeBuilder
 
@@ -358,78 +358,78 @@ class Stanza:
 
 class XmppHandler:
     def __init__(self, stream):
-        self._stream = stream
-        self._data, self._elem, self._last, self._tail = [], [], None, None
+        self.__stream = stream
+        self.__data, self.__elem, self.__last, self.__tail = [], [], None, None
 
     def close(self):
-        assert len(self._elem) == 0, "missing end tags"
-        assert self._last != None, "missing toplevel element"
-        return self._last
+        assert len(self.__elem) == 0, "missing end tags"
+        assert self.__last != None, "missing toplevel element"
+        return self.__last
 
-    def _flush(self):
-        if self._data:
-            if self._last is not None:
-                text = ''.join(self._data)
-                if self._tail:
-                    assert self._last.tail is None, "internal error (tail)"
-                    self._last.tail = text
+    def __flush(self):
+        if self.__data:
+            if self.__last is not None:
+                text = ''.join(self.__data)
+                if self.__tail:
+                    assert self.__last.tail is None, "internal error (tail)"
+                    self.__last.tail = text
                 else:
-                    assert self._last.text is None, "internal error (text)"
-                    self._last.text = text
-            self._data = []
+                    assert self.__last.text is None, "internal error (text)"
+                    self.__last.text = text
+            self.__data = []
 
     def data(self, data):
-        if len(self._elem) >= 2:
-            self._data.append(data)
+        if len(self.__elem) >= 2:
+            self.__data.append(data)
 
     def start(self, tag, attrs):
         if attrs == None:
             attrs = {}
-        self._flush()
-        self._last = elem = Element(tag, attrs)
-        if len(self._elem) == 0:
-            self._stream.stream_start(elem)
-        if len(self._elem) >= 2:
-            self._elem[-1].append(elem)
-        self._elem.append(elem)
-        self._tail = False
+        self.__flush()
+        self.__last = elem = Element(tag, attrs)
+        if len(self.__elem) == 0:
+            self.__stream._stream_start(elem)
+        if len(self.__elem) >= 2:
+            self.__elem[-1].append(elem)
+        self.__elem.append(elem)
+        self.__tail = False
         return elem
 
     def end(self, tag):
-        self._flush()
-        self._last = self._elem.pop()
-        assert self._last.tag == tag,\
+        self.__flush()
+        self.__last = self.__elem.pop()
+        assert self.__last.tag == tag,\
                "end tag mismatch (expected %s, got %s)" % (
-                   self._last.tag, tag)
-        self._tail = True
+                   self.__last.tag, tag)
+        self.__tail = True
 
-        if len(self._elem) == 0:
-            self._stream.stream_end(self._last)
-        elif len(self._elem) == 1:
-            self.element(self._last)
+        if len(self.__elem) == 0:
+            self.__stream._stream_end(self.__last)
+        elif len(self.__elem) == 1:
+            self.element(self.__last)
 
-        return self._last
+        return self.__last
 
     def element(self, elem):
         if elem.tag[:1] == '{':
             ns, tag = elem.tag[1:].split('}', 1)
             if ns == 'jabber:client' and tag in ('iq', 'presence', 'message'):
                 cls = Stanza.__dict__[tag.capitalize()]
-                self._stream._call_handler(cls(xmlnode=elem))
+                self.__stream._call_handler(cls(xmlnode=elem))
             elif ns == 'http://etherx.jabber.org/streams':
                 if tag == 'features':
-                    self._stream.stream_features(elem)
+                    self.__stream._stream_features(elem)
                 elif tag == 'error':
-                    self._stream.stream_error(elem)
+                    self.__stream._stream_error(elem)
                 else:
                     assert False, 'unknown stream element'
             elif ns == 'urn:ietf:params:xml:ns:xmpp-sasl':
                 if tag == 'challenge':
-                    self._stream.sasl_challenge(elem)
+                    self.__stream._sasl_challenge(elem)
                 elif tag == 'failure':
-                    self._stream.sasl_failure(elem)
+                    self.__stream._sasl_failure(elem)
                 elif tag == 'success':
-                    self._stream.sasl_success(elem)
+                    self.__stream._sasl_success(elem)
             else:
                 assert False, 'unknown top-level tag'
         else:
@@ -437,9 +437,10 @@ class XmppHandler:
 
 
 class XmppStream:
-    def __init__(self, server, handlers, encoding='utf-8'):
-        self._server, self._handlers, self._encoding = server, handlers, encoding
-        self._synced_feeder, self._tb, self._disconnected = None, None, False
+    def __init__(self, jid, handlers, encoding='utf-8', password=None):
+        self.__jid, self.__password = jid, password
+        self.__handlers, self.__encoding = handlers, encoding
+        self.__synced_feeder, self.__tb, self.__stream_open = None, None, False
 
     def _call_handler(self, stanza):
         key_lookup = {
@@ -453,7 +454,7 @@ class XmppStream:
         handler = None
         for i in range(len(key), 0, -1):
             try:
-                handler = self._handlers[key[:i]]
+                handler = self.__handlers[key[:i]]
             except KeyError:
                 pass
             if handler != None:
@@ -464,19 +465,78 @@ class XmppStream:
             self.unhandled_stanza(stanza)
 
 
-    def closed(self):
-        pass
+    def _close(self, tb):
+        tb.close()
+        if self.__tb != None and self.__tb == tb:
+            self.__synced_feeder, self.__tb = None, None
+            self.closed()
+
 
     def connect(self):
-        self._synced_feeder = Synced_Invoke()
-        self._tb = XMLTreeBuilder(target=XmppHandler(self))
-        self.send(('<?xml version=\'1.0\'?><stream:stream xmlns:stream="http://etherx.jabber.org/streams" xmlns="jabber:client" to="%s" version="1.0">' % (_escape_attrib(self._server),)).encode(self._encoding))
+        self.__synced_feeder = Synced_Invoke()
+        self.__tb = XMLTreeBuilder(target=XmppHandler(self))
+        self.send(('<?xml version=\'1.0\'?><stream:stream xmlns:stream="http://etherx.jabber.org/streams" xmlns="jabber:client" to="%s" version="1.0">' % (_escape_attrib(self.__jid.domain()),)).encode(self.__encoding))
+        self.__stream_open = True
 
     def disconnect(self):
-        if self._tb and not self._disconnected:
-            self._disconnected = True
-            self.send('</stream:stream>'.encode(self._encoding))
+        if self.__stream_open:
+            self.__stream_open = False
+            self.send('</stream:stream>'.encode(self.__encoding))
+
+    def feed(self, data):
+        self.__synced_feeder(self.__tb.feed, (data,))
+
+    def close(self):
+        self.__synced_feeder(self._close, (self.__tb,))
+
+
+    def _stream_start(self, elem):
+        self.stream_start(elem)
+
+    def _stream_features(self, elem):
+        sasl_mechanisms = [mech.text for mech in elem.findall('{urn:ietf:params:xml:ns:xmpp-sasl}mechanisms/{urn:ietf:params:xml:ns:xmpp-sasl}mechanism')]
+
+        if ('PLAIN' in sasl_mechanisms) and (self.__password != None):
+            # try SASL PLAIN authentication
+            auth = Element('{urn:ietf:params:xml:ns:xmpp-sasl}auth')
+            auth.set('mechanism', 'PLAIN')
+            auth.text = base64.b64encode(('\x00%s\x00%s' % (self.__jid.user(), self.__password)).encode('utf-8')).decode('ascii').strip()
+            self.send(tobytes(auth, self.__encoding))
+            return
+
+        if elem.find('{urn:ietf:params:xml:ns:xmpp-bind}bind') != None:
+            iq = Stanza.Iq(type='set', id='xmpplify_bind')
+            bind = Element('{urn:ietf:params:xml:ns:xmpp-bind}bind')
+            resource = Element('{urn:ietf:params:xml:ns:xmpp-bind}resource')
+            resource.text = self.__jid.resource()
+            if not resource.text:
+                resource.text = 'xmpplify'
+            bind.append(resource)
+            iq.xmlnode().append(bind)
+            self.send(iq.asbytes(self.__encoding))
+
+        self.stream_features(elem)
+
+    def _stream_error(self, elem):
+        self.stream_error(elem)
+        self.disconnect()
         self.shutdown()
+
+    def _stream_end(self, elem):
+        self.stream_end(elem)
+        self.disconnect()
+        self.shutdown()
+
+
+    def _sasl_challenge(self, elem):
+        self.sasl_challenge(elem)
+
+    def _sasl_failure(self, elem):
+        self.sasl_failure(elem)
+
+    def _sasl_success(self, elem):
+        self.sasl_success(elem)
+        XmppStream.connect(self)
 
 
     def stream_start(self, elem):
@@ -486,12 +546,10 @@ class XmppStream:
         pass
 
     def stream_error(self, elem):
-        self.disconnect()
+        pass
 
     def stream_end(self, elem):
-        self.disconnect()
-        self._tb = None
-
+        pass
 
     def sasl_challenge(self, elem):
         pass
@@ -507,16 +565,10 @@ class XmppStream:
         assert False, 'send method not implemented'
 
     def shutdown(self):
-        assert False, 'shutdown method not implemented'
+        pass
+
+    def closed(self):
+        pass
 
     def unhandled_stanza(self, stanza):
         pass
-
-
-    def feed(self, data):
-        self._synced_feeder(self._tb.feed, (data,))
-
-    def close(self):
-        if self._tb != None:
-            self._synced_feeder(self._tb.close, ())
-        self._synced_feeder(self.closed, ())
