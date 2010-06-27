@@ -1,15 +1,12 @@
 #!/usr/bin/python
-import base64, re, threading
+import base64, re, threading, types
 
 from xml.etree.cElementTree import Element, TreeBuilder, XMLTreeBuilder
 
 
 __all__ = [
-    'tobytes',
-    'Element',
-    'JID',
-    'Stanza',
-    'XmppStream',
+    'tobytes', 'Element',
+    'JID', 'Stanza', 'IqError', 'IqTimeout', 'XmppStream',
 ]
 
 _evil_characters = re.compile(r"[\000-\010\013\014\016-\037]", re.UNICODE)
@@ -196,6 +193,17 @@ class JID:
 
     def __hash__(self):
         return hash(self._user) ^ hash(self._domain) ^ hash(self._resource)
+
+
+class IqError(Exception):
+    def __init__(self, stanza):
+        self.__stanza = stanza
+
+    def stanza(self):
+        return self.__stanza
+
+class IqTimeout(Exception):
+    pass
 
 
 class Stanza:
@@ -442,15 +450,53 @@ class XmppStream:
         self.__handlers, self.__encoding = handlers, encoding
         self.__synced_feeder, self.__tb, self.__stream_open = None, None, False
 
-    def _call_handler(self, stanza):
-        key_lookup = {
-            'iq' : (Stanza.Iq.tag, Stanza.Iq.get_type),
-            'presence' : (Stanza.Presence.tag, Stanza.Presence.get_type),
-            'message' : (Stanza.Message.tag, Stanza.Message.get_type),
-            }
+        self.__iq_handlers = {}
+        self.__iq_handler_sync = threading.Lock()
 
-        fns = key_lookup[stanza.tag()]
-        key = tuple([fn(stanza) for fn in fns])
+
+    def register_iq_handler(self, regid, handler):
+        if regid != None:
+            self.__iq_handler_sync.acquire()
+            try:
+                self.__iq_handlers[regid] = handler
+            finally:
+                self.__iq_handler_sync.release()
+
+    def __do_callback(self, cb, args=()):
+        result = cb(*args)
+        if type(result) == types.GeneratorType:
+            self.register_iq_handler(result.send(None), result)
+        else:
+            return result
+
+    def _call_handler(self, stanza):
+        key = (stanza.tag(), stanza.get_type())
+        if key in (('iq', 'result'), ('iq', 'error')):
+            msgid = stanza.get_id()
+            iq_handler = None
+            try:
+                self.__iq_handler_sync.acquire()
+                try:
+                    iq_handler = self.__iq_handlers[msgid]
+                    del self.__iq_handlers[msgid]
+                finally:
+                    self.__iq_handler_sync.release()
+            except KeyError:
+                pass
+
+            if iq_handler != None:
+                try:
+                    if stanza.get_type() == 'result':
+                        reg = iq_handler.send(stanza)
+                    else:
+                        reg = iq_handler.throw(IqError(stanza))
+
+                    self.register_iq_handler(reg, iq_handler)
+                except StopIteration:
+                    pass
+
+                return
+
         handler = None
         for i in range(len(key), 0, -1):
             try:
@@ -458,7 +504,7 @@ class XmppStream:
             except KeyError:
                 pass
             if handler != None:
-                handler(stanza)
+                self.__do_callback(handler, (stanza,))
                 break
 
         if handler == None:
@@ -493,6 +539,39 @@ class XmppStream:
     def _stream_start(self, elem):
         self.stream_start(elem)
 
+
+    def __bind_and_start_session(self):
+        iq = Stanza.Iq(type='set', id='xmpplify_bind')
+        bind = Element('{urn:ietf:params:xml:ns:xmpp-bind}bind')
+        resource = Element('{urn:ietf:params:xml:ns:xmpp-bind}resource')
+        resource.text = self.__jid.resource()
+        if not resource.text:
+            resource.text = 'xmpplify'
+        bind.append(resource)
+        iq.xmlnode().append(bind)
+        self.send(iq.asbytes(self.__encoding))
+
+        stanza = yield 'xmpplify_bind'
+        if stanza == None:
+            return
+        elif stanza.get_type() != 'result':
+            return
+
+        iq = Stanza.Iq(type='set', id='xmpplify_session')
+        session = Element('{urn:ietf:params:xml:ns:xmpp-session}session')
+        iq.xmlnode().append(session)
+        self.send(iq.asbytes(self._encoding))
+
+        stanza = yield 'xmpplify_session'
+        if stanza == None:
+            return
+        elif stanza.get_type() != 'result':
+            return
+
+        self.__do_callback(self.session_start)
+        return
+
+
     def _stream_features(self, elem):
         sasl_mechanisms = [mech.text for mech in elem.findall('{urn:ietf:params:xml:ns:xmpp-sasl}mechanisms/{urn:ietf:params:xml:ns:xmpp-sasl}mechanism')]
 
@@ -505,15 +584,7 @@ class XmppStream:
             return
 
         if elem.find('{urn:ietf:params:xml:ns:xmpp-bind}bind') != None:
-            iq = Stanza.Iq(type='set', id='xmpplify_bind')
-            bind = Element('{urn:ietf:params:xml:ns:xmpp-bind}bind')
-            resource = Element('{urn:ietf:params:xml:ns:xmpp-bind}resource')
-            resource.text = self.__jid.resource()
-            if not resource.text:
-                resource.text = 'xmpplify'
-            bind.append(resource)
-            iq.xmlnode().append(bind)
-            self.send(iq.asbytes(self.__encoding))
+            self.__do_callback(self.__bind_and_start_session)
 
         self.stream_features(elem)
 
@@ -558,6 +629,9 @@ class XmppStream:
         pass
 
     def sasl_success(self, elem):
+        pass
+
+    def session_start(self):
         pass
 
 
