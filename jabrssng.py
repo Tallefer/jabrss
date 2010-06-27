@@ -906,8 +906,6 @@ class JabRSSStream(XmppStream):
         handlers = {
             ('iq', 'get') : self.iq_get,
             ('iq', 'set') : self.iq_set,
-            ('iq', 'result') : self.iq_result,
-            ('iq', 'error') : self.iq_error,
             ('message', 'normal') : self.message,
             ('message', 'chat') : self.message,
             ('message', 'headline') : self.message_headline,
@@ -1044,40 +1042,20 @@ class JabRSSStream(XmppStream):
                           from_=iq.get_to(), to=iq.get_from())
         self.send(reply.asbytes(self._encoding))
 
-    def iq_result(self, iq):
-        if iq.get_id() == 'xmpplify_bind':
-            reply = Stanza.Iq(type='set', id='xmpplify_session')
-            session = Element('{urn:ietf:params:xml:ns:xmpp-session}session')
-            reply.xmlnode().append(session)
-            self.send(reply.asbytes(self._encoding))
-            return
-        elif iq.get_id() == 'xmpplify_session':
-            reply = Stanza.Iq(type='get', id='roster')
-            reply.create_query('jabber:iq:roster')
-            self.send(reply.asbytes(self._encoding))
-        elif iq.get_id() == 'roster':
-            log_message('roster retrieved')
-            query = iq.get_query()
-            self.roster_updated(query.getchildren())
+    def session_start(self):
+        log_message('session start')
+        iq = Stanza.Iq(type='get', id='roster')
+        iq.create_query('jabber:iq:roster')
+        self.send(iq.asbytes(self._encoding))
 
-            reply = Stanza.Presence()
-            self.send(reply.asbytes(self._encoding))
-        else:
-            log_message('iq result', iq.get_id())
-            query = iq.get_query()
-            if query:
-                log_message('iq result', query.tag)
+        result = yield 'roster'
+        log_message('roster retrieved')
+        query = result.get_query()
+        self.roster_updated(query.getchildren())
 
-    def iq_error(self, iq):
-        if iq.get_id() in ('xmpplify_bind', 'xmpplify_session'):
-            # we are unable to recover from these...
-            self._term_flag = True
-            self.disconnect()
-        else:
-            log_message('iq error', iq.get_id())
-            error = iq.get_error()
-            if error:
-                log_message('iq error', error.tag)
+        presence = Stanza.Presence()
+        self.send(presence.asbytes(self._encoding))
+        return
 
     def unhandled_stanza(self, stanza):
         log_message('unhandled stanza', stanza.tag())
@@ -1660,6 +1638,7 @@ class JabRSSStream(XmppStream):
 
             for username in delete_users:
                 log_message('user "%s" in database, but not subscribed to the service' % (username,))
+                self._remove_user(username)
                 self._delete_user(username)
 
 

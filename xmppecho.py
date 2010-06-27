@@ -15,8 +15,6 @@ class EchoBot(XmppStream):
         handlers = {
             ('iq', 'get') : self.handle_iq_get,
             ('iq', 'set') : self.handle_iq_set,
-            ('iq', 'result') : self.handle_iq_result,
-            ('iq', 'error') : self.handle_iq_error,
             ('message', 'normal') : self.handle_message,
             ('message', 'chat') : self.handle_message,
             ('presence', None) : self.handle_presence_available,
@@ -97,33 +95,15 @@ class EchoBot(XmppStream):
         if query:
             print('iq set', query.tag)
 
-    def handle_iq_result(self, iq):
-        if iq.get_id() == 'xmpplify_bind':
-            reply = Stanza.Iq(type='set', id='xmpplify_session')
-            session = Element('{urn:ietf:params:xml:ns:xmpp-session}session')
-            reply.xmlnode().append(session)
-            self.send(reply.asbytes(self._encoding))
-            return
-        elif iq.get_id() == 'xmpplify_session':
-            reply = Stanza.Iq(type='get', id='roster')
-            reply.create_query('jabber:iq:roster')
-            self.send(reply.asbytes(self._encoding))
-            return
-        elif iq.get_id() == 'roster':
-            reply = Stanza.Presence()
-            self.send(reply.asbytes(self._encoding))
-            return
-        else:
-            print('iq result', iq.get_id())
-            query = iq.get_query()
-            if query:
-                print('iq result', query.tag)
+    def session_start(self):
+        iq = Stanza.Iq(type='get', id='roster')
+        iq.create_query('jabber:iq:roster')
+        self.send(iq.asbytes(self._encoding))
 
-    def handle_iq_error(self, iq):
-        print('iq error', iq.get_id())
-        error = iq.get_error()
-        if error:
-            print('iq error', error.tag)
+        result = yield 'roster'
+        presence = Stanza.Presence()
+        self.send(presence.asbytes(self._encoding))
+        return
 
     def handle_message(self, message):
         subject, body = message.get_subject(), message.get_body()
