@@ -34,13 +34,6 @@ else:
     import http.client as httplib
 
 
-try:
-    from cStringIO import StringIO
-except ImportError:
-    from StringIO import StringIO
-import mimetools
-
-
 logger = logging.getLogger('parserss')
 
 
@@ -1843,10 +1836,10 @@ class RSS_Resource:
                         url_protocol, url_host, url_path = split_url(redirect_url)
                         redirect_tries = -redirect_tries
                     else:
-                        logger.warn('%d %s %s' % (errcode, errmsg, repr(headers)))
+                        logger.warn('%d %s %s' % (errcode, errmsg, str(headers)))
                         error_info = 'HTTP: %d %s' % (errcode, errmsg)
                 else:
-                    logger.warn(('%d %s %s' % (errcode, errmsg, repr(headers))))
+                    logger.warn(('%d %s %s' % (errcode, errmsg, str(headers))))
                     error_info = 'HTTP: %d %s' % (errcode, errmsg)
 
             if self._invalid_since and not error_info and redirect_tries == 0:
