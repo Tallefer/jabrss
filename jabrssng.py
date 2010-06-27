@@ -21,19 +21,18 @@ import string, sys, thread, threading, time, traceback, types
 
 from xmpplify import tobytes, Element, JID, Stanza, XmppStream
 
-import parserss
 from parserss import RSS_Resource, RSS_Resource_id2url, RSS_Resource_simplify
 from parserss import RSS_Resource_db, RSS_Resource_Cursor
 from parserss import UrlError
+from parserss import init_parserss
 
 
-logger = logging.getLogger("JabRSS")
+logger = logging.getLogger('JabRSS')
 
 def log_message(*msg):
     logger.info(u' '.join(map(lambda x: unicode(x), msg)))
 
-parserss.init(logmsg_func = log_message,
-              dbsync_obj = thread.allocate_lock())
+init_parserss(dbsync_obj = thread.allocate_lock())
 
 
 TEXT_WELCOME = '''\

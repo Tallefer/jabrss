@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (C) 2001-2009, Christof Meerwald
+# Copyright (C) 2001-2010, Christof Meerwald
 # http://jabrss.cmeerw.org
 
 # This program is free software; you can redistribute it and/or modify
@@ -16,7 +16,7 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
-import codecs, hashlib, rfc822, os, random, re, socket, string, struct
+import codecs, hashlib, logging, rfc822, os, random, re, socket, string, struct
 import sys, time, threading, traceback, types, zlib
 import sqlite3
 
@@ -33,9 +33,6 @@ if sys.version_info[0] == 2:
 else:
     import http.client as httplib
 
-SOCKET_CONNECTTIMEOUT = 60
-SOCKET_TIMEOUT = 60
-
 
 try:
     from cStringIO import StringIO
@@ -44,22 +41,14 @@ except ImportError:
 import mimetools
 
 
-if hasattr(socket, 'setdefaulttimeout'):
-    # Python >= 2.3 has native support for socket timeouts
-    socket.setdefaulttimeout(SOCKET_CONNECTTIMEOUT)
-    TimeoutException = socket.timeout
-else:
-    class TimeoutException(socket.error):
-        pass
+logger = logging.getLogger('parserss')
 
-    # try to use timeoutsocket if it is available
-    try:
-        import timeoutsocket
-        timeoutsocket.Timeout = TimeoutException
-        timeoutsocket.setDefaultSocketTimeout(SOCKET_CONNECTTIMEOUT)
-    except ImportError:
-        pass
 
+__all__ = [
+    'RSS_Resource', 'RSS_Resource_id2url', 'RSS_Resource_simplify'
+    'RSS_Resource_db', 'RSS_Resource_Cursor',
+    'UrlError', 'init_parserss',
+]
 
 re_validprotocol = re.compile('^(?P<protocol>[a-z]+):(?P<rest>.*)$')
 
@@ -94,9 +83,6 @@ def RSS_Resource_db():
 
     return db
 
-def default_log_message(*msg):
-    return
-
 class Null_Synchronizer:
     def acquire(self):
         return
@@ -110,22 +96,18 @@ INTERVAL_DIVIDER = 3
 MIN_INTERVAL = 45*60
 MAX_INTERVAL = 24*60*60
 DB_FILENAME = 'jabrss_res.db'
-log_message = default_log_message
 
-def init(db_fname = DB_FILENAME,
-         min_interval = MIN_INTERVAL,
-         max_interval = MAX_INTERVAL,
-         interval_div = INTERVAL_DIVIDER,
-         logmsg_func = log_message,
-         dbsync_obj = Null_Synchronizer()):
+def init_parserss(db_fname = DB_FILENAME,
+                  min_interval = MIN_INTERVAL,
+                  max_interval = MAX_INTERVAL,
+                  interval_div = INTERVAL_DIVIDER,
+                  dbsync_obj = Null_Synchronizer()):
     global DB_FILENAME, MIN_INTERVAL, MAX_INTERVAL, INTERVAL_DIVIDER
-    global log_message
 
     DB_FILENAME = db_fname
     MIN_INTERVAL = min_interval
     MAX_INTERVAL = max_interval
     INTERVAL_DIVIDER = interval_div
-    log_message = logmsg_func
 
     RSS_Resource._db_sync = dbsync_obj
 
@@ -361,6 +343,17 @@ class Data:
 
 
 class HTTPConnection(httplib.HTTPConnection):
+    def __init__(self, host, port=None, strict=None,
+                 timeout=socket.getdefaulttimeout(),
+                 read_timeout=socket.getdefaulttimeout()):
+        httplib.HTTPConnection.__init__(self, host, port=port, strict=strict,
+                                        timeout=timeout)
+        self.__read_timeout = read_timeout
+
+    def connect(self):
+        httplib.HTTPConnection.connect(self)
+        self.sock.settimeout(self.__read_timeout)
+
     def putrequest(self, method, url):
         self._http_vsn = 10
         httplib.HTTPConnection.putrequest(self, method, url, True)
@@ -368,6 +361,17 @@ class HTTPConnection(httplib.HTTPConnection):
 
 
 class HTTPSConnection(httplib.HTTPSConnection):
+    def __init__(self, host, port=None, strict=None,
+                 timeout=socket.getdefaulttimeout(),
+                 read_timeout=socket.getdefaulttimeout()):
+        httplib.HTTPSConnection.__init__(self, host, port=port, strict=strict,
+                                         timeout=timeout)
+        self.__read_timeout = read_timeout
+
+    def connect(self):
+        httplib.HTTPSConnection.connect(self)
+        self.sock.settimeout(self.__read_timeout)
+
     def putrequest(self, method, url):
         self._http_vsn = 10
         httplib.HTTPConnection.putrequest(self, method, url, True)
@@ -1346,7 +1350,7 @@ class Feed_Parser(xmllib.XMLParser):
 
     def unknown_starttag(self, tag, attrs):
         if self._format == '':
-            log_message('format not recognised, start-tag', tag.encode('iso8859-1', 'replace'))
+            logger.warn('format not recognised, start-tag %s' % (tag,))
             self._format = 'unknown'
 
         if (self._cdata != None) and (tag[:29] == 'http://www.w3.org/1999/xhtml '):
@@ -1357,16 +1361,16 @@ class Feed_Parser(xmllib.XMLParser):
             self._cdata += '>'
 
         if tag[-8:] == ' channel':
-            log_message('unknown namespace for', tag.encode('iso8859-1', 'replace'))
+            logger.warn('unknown namespace for %s' % (tag,))
         elif tag[-5:] == ' item':
-            log_message('unknown namespace for', tag.encode('iso8859-1', 'replace'))
+            logger.warn('unknown namespace for %s' % (tag,))
         elif self._state & 0xfc:
             if tag[-6:] == ' title':
-                log_message('unknown namespace for', tag.encode('iso8859-1', 'replace'))
+                logger.warn('unknown namespace for %s' % (tag,))
             elif tag[-5:] == ' link':
-                log_message('unknown namespace for', tag.encode('iso8859-1', 'replace'))
+                logger.warn('unknown namespace for %s' % (tag,))
             elif tag[-12:] == ' description':
-                log_message('unknown namespace for', tag.encode('iso8859-1', 'replace'))
+                logger.warn('unknown namespace for %s' % (tag,))
 
     def unknown_endtag(self, tag):
         if (self._cdata != None) and (tag[:29] == 'http://www.w3.org/1999/xhtml '):
@@ -1435,7 +1439,7 @@ class Feed_Parser(xmllib.XMLParser):
         try:
             self._append_cdata(ENTITIES[entity].decode('iso8859-1'))
         except KeyError:
-            log_message('ignoring unknown entity ref', entity.encode('iso8859-1', 'replace'))
+            logger.info('ignoring unknown entity ref' % (entity,))
 
     def _current_elem(self):
         if self._state & 0x08:
@@ -1464,10 +1468,11 @@ class RSS_Resource:
     http_proxy = None
 
 
-    def __init__(self, url, res_db=None):
+    def __init__(self, url, res_db=None, connect_timeout=30, timeout=20):
         self._lock = threading.Lock()
         self._url = url
         self._url_protocol, self._url_host, self._url_path = split_url(url)
+        self._connect_timeout, self._timeout = connect_timeout, timeout
 
         self._id = None
         self._last_updated, self._last_modified = None, None
@@ -1665,9 +1670,13 @@ class RSS_Resource:
                 else:
                     conn_reused = False
                     if url_protocol == 'https':
-                        h = HTTPSConnection(host)
+                        h = HTTPSConnection(host,
+                                            timeout=self._connect_timeout,
+                                            read_timeout=self._timeout)
                     else:
-                        h = HTTPConnection(host)
+                        h = HTTPConnection(host,
+                                           timeout=self._connect_timeout,
+                                           read_timeout=self._timeout)
 
                 http_protocol = url_protocol
                 http_host = host
@@ -1676,22 +1685,15 @@ class RSS_Resource:
                     h.putrequest('GET', request)
 
                     if conn_reused:
-                        log_message('reused HTTP connection')
+                        logger.debug('reused HTTP connection')
                 except httplib.CannotSendRequest:
-                    log_message('caught CannotSendRequest, opening new connection')
+                    logger.warn('caught CannotSendRequest, opening new connection')
 
                     if not conn_reused:
                         raise
 
                     h = HTTPConnection(host)
                     h.putrequest('GET', request)
-
-                # adjust the socket timeout after the connection has been
-                # established
-                if hasattr(h.sock, 'settimeout'):
-                    h.sock.settimeout(SOCKET_TIMEOUT)
-                elif hasattr(h.sock, 'set_timeout'):
-                    h.sock.set_timeout(SOCKET_TIMEOUT)
 
                 if not RSS_Resource.http_proxy:
                     h.putheader('Host', url_host)
@@ -1727,10 +1729,10 @@ class RSS_Resource:
                     transfer_encoding = headers.get('transfer-encoding', None)
 
                     if (content_encoding == 'gzip') or (transfer_encoding == 'gzip'):
-                        log_message('gzip-encoded data')
+                        logger.debug('gzip-encoded data')
                         decoder = Gzip_Decompressor()
                     elif (content_encoding == 'deflate') or (transfer_encoding == 'deflate'):
-                        log_message('deflate-encoded data')
+                        logger.debug('deflate-encoded data')
                         decoder = Deflate_Decompressor()
                     else:
                         decoder = Null_Decompressor()
@@ -1837,19 +1839,19 @@ class RSS_Resource:
 
                             redirect_url = base_url + redirect_url
 
-                        log_message('Following redirect (%d) to "%s"' % (errcode, redirect_url.encode('iso8859-1', 'replace')))
+                        logger.info('Following redirect (%d) to "%s"' % (errcode, redirect_url))
                         url_protocol, url_host, url_path = split_url(redirect_url)
                         redirect_tries = -redirect_tries
                     else:
-                        log_message(errcode, errmsg, headers)
+                        logger.warn('%d %s %s' % (errcode, errmsg, repr(headers)))
                         error_info = 'HTTP: %d %s' % (errcode, errmsg)
                 else:
-                    log_message(errcode, errmsg, headers)
+                    logger.warn(('%d %s %s' % (errcode, errmsg, repr(headers))))
                     error_info = 'HTTP: %d %s' % (errcode, errmsg)
 
             if self._invalid_since and not error_info and redirect_tries == 0:
                 error_info = 'redirect: maximum number of redirects exceeded'
-        except TimeoutException, e:
+        except socket.timeout, e:
             error_info = 'timeout: ' + str(e)
         except socket.error, e:
             error_info = 'socket: ' + str(e)
@@ -1877,7 +1879,7 @@ class RSS_Resource:
             traceback.print_exc(file=sys.stdout)
 
         if error_info:
-            log_message('Error: %s' % (error_info,))
+            logger.warn('Error: %s' % (error_info,))
 
         if cursor == None:
             cursor = Cursor(db)
@@ -2133,9 +2135,20 @@ def RSS_Resource_simplify(url):
 
 
 if __name__ == '__main__':
-    import sys
+    import locale, sys
 
-    init()
+    locale.setlocale(locale.LC_CTYPE, '')
+    encoding = locale.getlocale()[1]
+    if not encoding:
+        encoding = 'us-ascii'
+    sys.stdout = codecs.getwriter(encoding)(sys.stdout, errors='replace')
+    sys.stderr = codecs.getwriter(encoding)(sys.stderr, errors='replace')
+
+    logger = logging.getLogger()
+    logger.addHandler(logging.StreamHandler())
+    logger.setLevel(logging.DEBUG)
+
+    init_parserss()
     db = RSS_Resource_db()
 
     for url in sys.argv[1:]:
@@ -2143,13 +2156,15 @@ if __name__ == '__main__':
 
         new_items, next_item_id, redirect_resource, redirect_seq, redirects = resource.update(db)
         channel_info = resource.channel_info()
-        print('%s %s %s' % (channel_info.title.encode('iso8859-1', 'replace'), channel_info.link.encode('iso8859-1', 'replace'), channel_info.descr.encode('iso8859-1', 'replace')))
+        print('%s %s %s' % (channel_info.title, channel_info.link, channel_info.descr))
         error_info = resource.error_info()
         if error_info:
             print('error info %s' % (error_info))
 
         if len(new_items) > 0:
-            print('new items %s %d' % (', '.join(map(lambda x: (x.title.encode('iso8859-1', 'replace'), x.link.encode('iso8859-1', 'replace')), new_items)), next_item_id))
+            print('new items (next id; %d):\n  %s' %
+                  (next_item_id,
+                   '\n  '.join(['%s - %s' % (x.title, x.link) for x in new_items])))
 
     db.close()
     del db
