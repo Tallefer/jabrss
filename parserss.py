@@ -339,8 +339,8 @@ class HTTPConnection(httplib.HTTPConnection):
     def __init__(self, host, port=None, strict=None,
                  timeout=socket.getdefaulttimeout(),
                  read_timeout=socket.getdefaulttimeout()):
-        httplib.HTTPConnection.__init__(self, host, port=port, strict=strict,
-                                        timeout=timeout)
+        httplib.HTTPConnection.__init__(self, host, port=port, strict=strict)
+        self.timeout = timeout
         self.__read_timeout = read_timeout
 
     def connect(self):
@@ -357,8 +357,8 @@ class HTTPSConnection(httplib.HTTPSConnection):
     def __init__(self, host, port=None, strict=None,
                  timeout=socket.getdefaulttimeout(),
                  read_timeout=socket.getdefaulttimeout()):
-        httplib.HTTPSConnection.__init__(self, host, port=port, strict=strict,
-                                         timeout=timeout)
+        httplib.HTTPSConnection.__init__(self, host, port=port, strict=strict)
+        self.timeout = timeout
         self.__read_timeout = read_timeout
 
     def connect(self):
