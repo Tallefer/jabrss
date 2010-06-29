@@ -1,4 +1,21 @@
 #!/usr/bin/python
+# Copyright (C) 2010, Christof Meerwald
+# http://jabrss.cmeerw.org
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; version 2 dated June, 1991.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+# USA
+
 import base64, re, threading, types
 
 from xml.etree.cElementTree import Element, TreeBuilder, XMLTreeBuilder
@@ -13,45 +30,6 @@ _evil_characters = re.compile(r"[\000-\010\013\014\016-\037]", re.UNICODE)
 _namespace_map = {
     "http://www.w3.org/XML/1998/namespace": "xml",
 }
-
-
-class Synced_Invoke:
-    def __init__(self):
-        self._lock, self._queue, self._flag = threading.Lock(), [], False
-
-    def __call__(self, fn, args):
-        self._lock.acquire()
-        try:
-            if self._flag:
-                self._queue.append((fn, args))
-                return
-            else:
-                self._flag = True
-        finally:
-            self._lock.release()
-
-        while True:
-            need_cleanup = True
-            try:
-                fn(*args)
-                need_cleanup = False
-            finally:
-                if need_cleanup:
-                    self._lock.acquire()
-                    del self._queue[:]
-                    self._flag = False
-                    self._lock.release()
-
-            self._lock.acquire()
-            try:
-                if len(self._queue):
-                    fn, args = self._queue[0]
-                    del self._queue[0]
-                else:
-                    self._flag = False
-                    return
-            finally:
-                self._lock.release()
 
 
 def fixtag(tag, default_ns, namespaces, set_default=False):
@@ -511,15 +489,7 @@ class XmppStream:
             self.unhandled_stanza(stanza)
 
 
-    def _close(self, tb):
-        tb.close()
-        if self.__tb != None and self.__tb == tb:
-            self.__synced_feeder, self.__tb = None, None
-            self.closed()
-
-
     def connect(self):
-        self.__synced_feeder = Synced_Invoke()
         self.__tb = XMLTreeBuilder(target=XmppHandler(self))
         self.send(('<?xml version=\'1.0\'?><stream:stream xmlns:stream="http://etherx.jabber.org/streams" xmlns="jabber:client" to="%s" version="1.0">' % (_escape_attrib(self.__jid.domain()),)).encode(self.__encoding))
         self.__stream_open = True
@@ -530,10 +500,13 @@ class XmppStream:
             self.send('</stream:stream>'.encode(self.__encoding))
 
     def feed(self, data):
-        self.__synced_feeder(self.__tb.feed, (data,))
+        self.__tb.feed(data)
 
     def close(self):
-        self.__synced_feeder(self._close, (self.__tb,))
+        self.__tb.close()
+        if self.__tb != None:
+            self.__synced_feeder, self.__tb = None, None
+            self.closed()
 
 
     def _stream_start(self, elem):
@@ -552,22 +525,12 @@ class XmppStream:
         self.send(iq.asbytes(self.__encoding))
 
         stanza = yield 'xmpplify_bind'
-        if stanza == None:
-            return
-        elif stanza.get_type() != 'result':
-            return
-
         iq = Stanza.Iq(type='set', id='xmpplify_session')
         session = Element('{urn:ietf:params:xml:ns:xmpp-session}session')
         iq.xmlnode().append(session)
         self.send(iq.asbytes(self._encoding))
 
         stanza = yield 'xmpplify_session'
-        if stanza == None:
-            return
-        elif stanza.get_type() != 'result':
-            return
-
         self.__do_callback(self.session_start)
         return
 
@@ -586,7 +549,7 @@ class XmppStream:
         if elem.find('{urn:ietf:params:xml:ns:xmpp-bind}bind') != None:
             self.__do_callback(self.__bind_and_start_session)
 
-        self.stream_features(elem)
+        self.__do_callback(self.stream_features, (elem,))
 
     def _stream_error(self, elem):
         self.stream_error(elem)
