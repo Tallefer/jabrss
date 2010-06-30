@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import socket, threading
+import ssl, socket, threading
 
 from xmpplify import Element, JID, Stanza, XmppStream
 
@@ -26,7 +26,8 @@ class EchoBot(XmppStream):
             ('presence', 'unsubscribed') : self.handle_presence_control,
             }
         XmppStream.__init__(self, self._jid, handlers,
-                            encoding=self._encoding, password=password)
+                            encoding=self._encoding, password=password,
+                            prefer_tls=True)
 
 
     def _stream_closed(self):
@@ -81,6 +82,15 @@ class EchoBot(XmppStream):
 
     def wait(self):
         self._closed.wait()
+
+
+    def starttls_proceed(self, elem):
+        self._sock = ssl.wrap_socket(self._sock, do_handshake_on_connect=False)
+        self._sock.do_handshake()
+        XmppStream.connect(self)
+
+    def starttls_failure(self, elem):
+        pass
 
 
     def handle_iq_get(self, iq):

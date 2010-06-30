@@ -16,8 +16,8 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
-import base64, bisect, codecs, getopt, locale, logging, os, socket, sqlite3
-import string, sys, thread, threading, time, traceback, types
+import base64, bisect, codecs, getopt, locale, logging, os, ssl, socket
+import sqlite3, string, sys, thread, threading, time, traceback, types
 
 from xmpplify import tobytes, Element, JID, Stanza, XmppStream
 
@@ -1002,6 +1002,20 @@ class JabRSSStream(XmppStream):
 
     def stream_end(self, elem):
         storage.evict_all_users()
+
+
+    def starttls_proceed(self, elem):
+        log_message('starttls proceed')
+        self._sock = ssl.wrap_socket(self._sock, do_handshake_on_connect=False)
+        self._sock.do_handshake()
+        XmppStream.connect(self)
+
+    def starttls_failure(self, elem):
+        # we are unable to recover here...
+        log_message('starttls failure')
+        self._term_flag = True
+        self.disconnect()
+
 
     def sasl_failure(self, elem):
         # we are unable to recover from these...

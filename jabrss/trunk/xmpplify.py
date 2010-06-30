@@ -416,6 +416,11 @@ class XmppHandler:
                     self.__stream._sasl_failure(elem)
                 elif tag == 'success':
                     self.__stream._sasl_success(elem)
+            elif ns == 'urn:ietf:params:xml:ns:xmpp-tls':
+                if tag == 'proceed':
+                    self.__stream._starttls_proceed(elem)
+                elif tag == 'failure':
+                    self.__stream._starttls_failure(elem)
             else:
                 assert False, 'unknown top-level tag'
         else:
@@ -423,8 +428,10 @@ class XmppHandler:
 
 
 class XmppStream:
-    def __init__(self, jid, handlers, encoding='utf-8', password=None):
+    def __init__(self, jid, handlers, encoding='utf-8', password=None,
+                 prefer_tls=False):
         self.__jid, self.__password = jid, password
+        self.__prefer_tls = prefer_tls
         self.__handlers, self.__encoding = handlers, encoding
         self.__synced_feeder, self.__tb, self.__stream_open = None, None, False
 
@@ -513,30 +520,42 @@ class XmppStream:
         self.stream_start(elem)
 
 
-    def __bind_and_start_session(self):
-        iq = Stanza.Iq(type='set', id='xmpplify_bind')
-        bind = Element('{urn:ietf:params:xml:ns:xmpp-bind}bind')
-        resource = Element('{urn:ietf:params:xml:ns:xmpp-bind}resource')
-        resource.text = self.__jid.resource()
-        if not resource.text:
-            resource.text = 'xmpplify'
-        bind.append(resource)
-        iq.xmlnode().append(bind)
-        self.send(iq.asbytes(self.__encoding))
+    def __bind_and_start_session(self, elem):
+        if elem.find('{urn:ietf:params:xml:ns:xmpp-bind}bind') != None:
+            iq = Stanza.Iq(type='set', id='xmpplify_bind')
+            bind = Element('{urn:ietf:params:xml:ns:xmpp-bind}bind')
+            resource = Element('{urn:ietf:params:xml:ns:xmpp-bind}resource')
+            resource.text = self.__jid.resource()
+            if not resource.text:
+                resource.text = 'xmpplify'
+            bind.append(resource)
+            iq.xmlnode().append(bind)
+            self.send(iq.asbytes(self.__encoding))
 
-        stanza = yield 'xmpplify_bind'
-        iq = Stanza.Iq(type='set', id='xmpplify_session')
-        session = Element('{urn:ietf:params:xml:ns:xmpp-session}session')
-        iq.xmlnode().append(session)
-        self.send(iq.asbytes(self._encoding))
+            stanza = yield 'xmpplify_bind'
 
-        stanza = yield 'xmpplify_session'
+        if elem.find('{urn:ietf:params:xml:ns:xmpp-session}session') != None:
+            iq = Stanza.Iq(type='set', id='xmpplify_session')
+            session = Element('{urn:ietf:params:xml:ns:xmpp-session}session')
+            iq.xmlnode().append(session)
+            self.send(iq.asbytes(self._encoding))
+
+            stanza = yield 'xmpplify_session'
+
         self.__do_callback(self.session_start)
         return
 
 
     def _stream_features(self, elem):
         sasl_mechanisms = [mech.text for mech in elem.findall('{urn:ietf:params:xml:ns:xmpp-sasl}mechanisms/{urn:ietf:params:xml:ns:xmpp-sasl}mechanism')]
+
+        starttls = elem.find('{urn:ietf:params:xml:ns:xmpp-tls}starttls')
+        if starttls != None:
+            required = starttls.find('{urn:ietf:params:xml:ns:xmpp-tls}required')
+            if required != None or self.__prefer_tls:
+                starttls = Element('{urn:ietf:params:xml:ns:xmpp-tls}starttls')
+                self.send(tobytes(starttls, self.__encoding))
+                return
 
         if ('PLAIN' in sasl_mechanisms) and (self.__password != None):
             # try SASL PLAIN authentication
@@ -546,9 +565,7 @@ class XmppStream:
             self.send(tobytes(auth, self.__encoding))
             return
 
-        if elem.find('{urn:ietf:params:xml:ns:xmpp-bind}bind') != None:
-            self.__do_callback(self.__bind_and_start_session)
-
+        self.__do_callback(self.__bind_and_start_session, (elem,))
         self.__do_callback(self.stream_features, (elem,))
 
     def _stream_error(self, elem):
@@ -573,6 +590,13 @@ class XmppStream:
         XmppStream.connect(self)
 
 
+    def _starttls_proceed(self, elem):
+        self.starttls_proceed(elem)
+
+    def _starttls_failure(self, elem):
+        self.starttls_failure(elem)
+
+
     def stream_start(self, elem):
         pass
 
@@ -595,6 +619,12 @@ class XmppStream:
         pass
 
     def session_start(self):
+        pass
+
+    def starttls_proceed(self, elem):
+        pass
+
+    def starttls_failure(self, elem):
         pass
 
 
