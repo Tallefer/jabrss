@@ -353,43 +353,33 @@ class DataStorage:
 
     # @throws KeyError
     def get_user(self, jid):
-        pos = string.find(jid, '/')
-        if pos != -1:
-            jid_resource = jid[pos + 1:]
-            jid = jid[:pos]
-        else:
+        key = jid.bare().tostring().lower()
+        jid_resource = jid.resource()
+        if jid_resource == None:
             jid_resource = ''
-
-        jid = jid.lower()
-
-        return self._users[jid], jid_resource
+        return self._users[key], jid_resource
 
     # @throws KeyError
     def get_user_by_id(self, uid):
         return self._users[uid]
 
     def get_new_user(self, jid, presence_show):
-        pos = string.find(jid, '/')
-        if pos != -1:
-            jid_resource = jid[pos + 1:]
-            jid = jid[:pos]
-        else:
-            if presence_show == None:
-                jid_resource = None
-            else:
-                jid_resource = ''
-
-        jid = jid.lower()
+        key = jid.bare().tostring().lower()
+        jid_resource = jid.resource()
+        if presence_show == None:
+            jid_resource = None
+        elif jid_resource == None:
+            jid_resource = ''
 
         try:
-            user = self._users[jid]
+            user = self._users[key]
             user.set_presence(jid_resource, presence_show)
             return user, jid_resource
         except KeyError:
-            user = JabberUser(jid, jid_resource, presence_show)
+            user = JabberUser(key, jid_resource, presence_show)
 
             users_unlocker = self.users_lock()
-            self._users[jid] = user
+            self._users[key] = user
             self._users[user.uid()] = user
             del users_unlocker
 
@@ -1028,19 +1018,30 @@ class JabRSSStream(XmppStream):
 
 
     def iq_get(self, iq):
-        log_message('iq get', iq.get_id())
+        logmsg = ['iq get', iq.get_id()]
+        from_ = iq.get_from()
+        if from_ != None:
+            logmsg.append(from_.tostring())
         query = iq.get_query()
-        if query:
-            log_message('iq get', query.tag)
+        if query != None:
+            logmsg.append(query.tag)
+        log_message(' '.join(logmsg))
 
         reply = Stanza.Iq(id=iq.get_id(), type='error',
                           from_=iq.get_to(), to=iq.get_from())
         self.send(reply.asbytes(self._encoding))
 
     def iq_set(self, iq):
-        log_message('iq set', iq.get_id())
+        logmsg = ['iq set', iq.get_id()]
+        from_ = iq.get_from()
+        if from_ != None:
+            logmsg.append(from_.tostring())
         query = iq.get_query()
-        if query:
+        if query != None:
+            logmsg.append(query.tag)
+        log_message(' '.join(logmsg))
+
+        if query != None:
             if query.tag == '{jabber:iq:roster}query':
                 item = query.find('{jabber:iq:roster}item')
                 if item != None:
@@ -1049,8 +1050,6 @@ class JabRSSStream(XmppStream):
                                       from_=iq.get_to(), to=iq.get_from())
                     self.send(reply.asbytes(self._encoding))
                     return
-            else:
-                log_message('iq set', query.tag)
 
         reply = Stanza.Iq(id=iq.get_id(), type='error',
                           from_=iq.get_to(), to=iq.get_from())
@@ -1434,20 +1433,21 @@ class JabRSSStream(XmppStream):
 
 
     def _remove_user(self, jid, send_unsubscribed=True):
+        bare_jid = jid.bare()
         self._roster_id += 1
         iq = Stanza.Iq(type='set', id='r%d' % (self._roster_id,))
         query = iq.create_query('jabber:iq:roster')
         item = Element('{jabber:iq:roster}item')
-        item.set('jid', jid)
+        item.set('jid', bare_jid.tostring())
         item.set('subscription', 'remove')
         query.append(item)
         self.send(iq.asbytes(self._encoding))
 
-        presence = Stanza.Presence(to = JID(jid), type = 'unsubscribe')
+        presence = Stanza.Presence(to = bare_jid, type = 'unsubscribe')
         self.send(presence.asbytes(self._encoding))
 
         if send_unsubscribed:
-            presence = Stanza.Presence(to = JID(jid), type = 'unsubscribed')
+            presence = Stanza.Presence(to = bare_jid, type = 'unsubscribed')
             self.send(presence.asbytes(self._encoding))
 
 
@@ -1455,7 +1455,7 @@ class JabRSSStream(XmppStream):
     def _delete_user(self, jid):
         try:
             user, jid_resource = storage.get_new_user(jid, None)
-            log_message('deleting user\'s %s subscriptions: %s' % (jid, repr(user.resources())))
+            log_message('deleting user\'s %s subscriptions: %s' % (jid.tostring(), repr(user.resources())))
             for res_id in user.resources():
                 resource = storage.get_resource_by_id(res_id)
                 resource.lock()
@@ -1483,7 +1483,7 @@ class JabRSSStream(XmppStream):
 
         if typ in ('normal', 'chat'):
             try:
-                user, jid_resource = storage.get_user(sender.tostring())
+                user, jid_resource = storage.get_user(sender)
                 unknown_msg = False
 
                 if body == 'help':
@@ -1538,8 +1538,7 @@ class JabRSSStream(XmppStream):
         except ValueError:
             return
 
-        user, jid_resource = storage.get_new_user(sender.tostring(),
-                                                  presence)
+        user, jid_resource = storage.get_new_user(sender, presence)
         if user.get_delivery_state(presence):
             subs = None
 
@@ -1590,7 +1589,7 @@ class JabRSSStream(XmppStream):
                                      stanza.get_status(), stanza.get_show())
         log_message('presence', sender.tostring(), typ, show)
         try:
-            user, jid_resource = storage.get_user(sender.tostring())
+            user, jid_resource = storage.get_user(sender)
             user.set_presence(jid_resource, -1)
             if user.presence() < 0:
                 log_message('evicting user', user.jid())
@@ -1606,7 +1605,7 @@ class JabRSSStream(XmppStream):
         if typ == 'subscribe':
             msg_text = TEXT_WELCOME
             try:
-                storage.get_user(sender.tostring())
+                storage.get_user(sender)
             except KeyError:
                 msg_text += TEXT_NEWUSER
 
@@ -1623,8 +1622,8 @@ class JabRSSStream(XmppStream):
                                      type = 'subscribe')
             self.send(subscr.asbytes(self._encoding))
         if typ == 'unsubscribed':
-            self._delete_user(sender.tostring())
-            self._remove_user(sender.tostring(), False)
+            self._delete_user(sender)
+            self._remove_user(sender, False)
 
 
     def roster_updated(self, item):
@@ -1652,8 +1651,9 @@ class JabRSSStream(XmppStream):
 
             for username in delete_users:
                 log_message('user "%s" in database, but not subscribed to the service' % (username,))
-                self._remove_user(username)
-                self._delete_user(username)
+                jid = JID(username)
+                self._remove_user(jid)
+                self._delete_user(jid)
 
 
             subscribers = filter(lambda x: x[1] == True,
@@ -1683,8 +1683,9 @@ class JabRSSStream(XmppStream):
 
             for username in delete_users:
                 log_message('user "%s" hasn\'t used the service for more than 40 weeks' % (username,))
-                self._remove_user(username)
-                self._delete_user(username)
+                jid = JID(username)
+                self._remove_user(jid)
+                self._delete_user(jid)
         else:
             jid, subscription = item.get('jid'), item.get('subscription')
             log_message('roster updated', jid, subscription)
@@ -2049,7 +2050,7 @@ def console_handler(bot):
                 log_message(repr(users))
             elif s.startswith('dump user '):
                 try:
-                    user, resource = storage.get_user(s[10:].strip())
+                    user, resource = storage.get_user(JID(s[10:].strip()))
 
                     log_message('jid: %s, uid: %d' % (repr(user.jid()), user.uid()))
                     log_message('resources: %s' % (repr(user._jid_resources.items()),))
