@@ -1018,24 +1018,29 @@ class JabRSSStream(XmppStream):
 
 
     def iq_get(self, iq):
-        logmsg = ['iq get', iq.get_id()]
-        from_ = iq.get_from()
-        if from_ != None:
-            logmsg.append(from_.tostring())
+        logmsg = ['iq get']
+        iq_id, iq_from = iq.get_id(), iq.get_from()
+        if iq_id != None:
+            logmsg.append(iq_id)
+        if iq_from != None:
+            logmsg.append(iq_from.tostring())
         query = iq.get_query()
         if query != None:
             logmsg.append(query.tag)
         log_message(' '.join(logmsg))
 
-        reply = Stanza.Iq(id=iq.get_id(), type='error',
-                          from_=iq.get_to(), to=iq.get_from())
-        self.send(reply.asbytes(self._encoding))
+        if iq_id != None:
+            reply = Stanza.Iq(id=iq_id, type='error',
+                              from_=iq.get_to(), to=iq_from)
+            self.send(reply.asbytes(self._encoding))
 
     def iq_set(self, iq):
-        logmsg = ['iq set', iq.get_id()]
-        from_ = iq.get_from()
-        if from_ != None:
-            logmsg.append(from_.tostring())
+        logmsg = ['iq set']
+        iq_id, iq_from = iq.get_id(), iq.get_from()
+        if iq_id != None:
+            logmsg.append(iq_id)
+        if iq_from != None:
+            logmsg.append(iq_from.tostring())
         query = iq.get_query()
         if query != None:
             logmsg.append(query.tag)
@@ -1046,14 +1051,16 @@ class JabRSSStream(XmppStream):
                 item = query.find('{jabber:iq:roster}item')
                 if item != None:
                     self.roster_updated(item)
-                    reply = Stanza.Iq(id=iq.get_id(), type='result',
-                                      from_=iq.get_to(), to=iq.get_from())
-                    self.send(reply.asbytes(self._encoding))
+                    if iq_id != None:
+                        reply = Stanza.Iq(id=iq_id, type='result',
+                                          from_=iq.get_to(), to=iq_from)
+                        self.send(reply.asbytes(self._encoding))
                     return
 
-        reply = Stanza.Iq(id=iq.get_id(), type='error',
-                          from_=iq.get_to(), to=iq.get_from())
-        self.send(reply.asbytes(self._encoding))
+        if iq_id != None:
+            reply = Stanza.Iq(id=iq_id, type='error',
+                              from_=iq.get_to(), to=iq_from)
+            self.send(reply.asbytes(self._encoding))
 
     def session_start(self):
         log_message('session start')
