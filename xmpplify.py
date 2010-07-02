@@ -263,8 +263,12 @@ class Stanza:
                 self._xmlnode.attrib['id'] = val
 
 
-        def create_error(self):
-            return self._create_elem('jabber:client', 'error')
+        def create_error(self, **kwargs):
+            elem = self._create_elem('jabber:client', 'error')
+            for k, v in kwargs.items():
+                if k[-1:] == '_': k = k[:-1]
+                elem.set(k, v)
+            return elem
 
         def get_error(self):
             return self._xmlnode.find('{jabber:client}error')
@@ -289,6 +293,15 @@ class Stanza:
 
         def create_query(self, ns):
             return self._create_elem(ns, 'query')
+
+        def create_child(self, ns, tag):
+            return self._create_elem(ns, tag)
+
+        def get_child(self):
+            children = self._xmlnode.getchildren()[:1]
+            if len(children):
+                return children[0]
+            return None
 
         def get_query(self):
             return self._get_elem('query')
@@ -481,6 +494,11 @@ class XmppStream:
                     pass
 
                 return
+
+        if key[0] == 'iq':
+            child = stanza.get_child()
+            if child != None:
+                key = key + (child.tag,)
 
         handler = None
         for i in range(len(key), 0, -1):
