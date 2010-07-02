@@ -1066,6 +1066,7 @@ class JabRSSStream(XmppStream):
         query = result.get_query()
         self.roster_updated(query.getchildren())
 
+        log_message('sending presence')
         presence = Stanza.Presence()
         self.send(presence.asbytes(self._encoding))
         return
@@ -1432,24 +1433,21 @@ class JabRSSStream(XmppStream):
                 self.send(reply.asbytes(self._encoding))
 
 
-    def _remove_user(self, jid, send_unsubscribed=True, use_bare_jid=True):
-        if use_bare_jid:
-            bare_jid = jid.bare()
-        else:
-            bare_jid = jid
-
-        presence = Stanza.Presence(to = bare_jid, type = 'unsubscribe')
+    def _unsubscribe_user(self, jid, send_unsubscribed=True):
+        presence = Stanza.Presence(to = jid, type = 'unsubscribe')
         self.send(presence.asbytes(self._encoding))
 
         if send_unsubscribed:
-            presence = Stanza.Presence(to = bare_jid, type = 'unsubscribed')
+            presence = Stanza.Presence(to = jid, type = 'unsubscribed')
             self.send(presence.asbytes(self._encoding))
 
+    def _remove_user(self, jid):
         self._roster_id += 1
-        iq = Stanza.Iq(type='set', id='r%d' % (self._roster_id,))
+        iq_id = 'r%d' % (self._roster_id,)
+        iq = Stanza.Iq(type='set', id=iq_id)
         query = iq.create_query('jabber:iq:roster')
         item = Element('{jabber:iq:roster}item')
-        item.set('jid', bare_jid.tostring())
+        item.set('jid', jid.tostring())
         item.set('subscription', 'remove')
         query.append(item)
         self.send(iq.asbytes(self._encoding))
@@ -1626,8 +1624,8 @@ class JabRSSStream(XmppStream):
                                      type = 'subscribe')
             self.send(subscr.asbytes(self._encoding))
         if typ == 'unsubscribed':
-            self._delete_user(sender)
-            self._remove_user(sender, False)
+            self._unsubscribe_user(sender.bare(), False)
+            self._remove_user(sender.bare())
 
 
     def roster_updated(self, item):
@@ -1640,9 +1638,8 @@ class JabRSSStream(XmppStream):
                 else:
                     log_message('subscription for user "%s" is "%s" (!= "both")' % (user, subscription))
                     jid = JID(user)
-                    self._remove_user(jid, True, False)
-                    if jid.resource() == None:
-                        self._delete_user(jid)
+                    self._unsubscribe_user(jid)
+                    self._remove_user(jid)
 
             cursor = Cursor(db)
             result = cursor.execute('SELECT jid, uid FROM user')
@@ -1660,7 +1657,7 @@ class JabRSSStream(XmppStream):
             for username in delete_users:
                 log_message('user "%s" in database, but not subscribed to the service' % (username,))
                 jid = JID(username)
-                self._remove_user(jid)
+                self._unsubscribe_user(jid)
                 self._delete_user(jid)
 
 
@@ -1692,11 +1689,13 @@ class JabRSSStream(XmppStream):
             for username in delete_users:
                 log_message('user "%s" hasn\'t used the service for more than 40 weeks' % (username,))
                 jid = JID(username)
+                self._unsubscribe_user(jid)
                 self._remove_user(jid)
-                self._delete_user(jid)
         else:
             jid, subscription = item.get('jid'), item.get('subscription')
             log_message('roster updated', jid, subscription)
+            if subscription == 'remove':
+                self._delete_user(JID(jid))
 
     def _format_header(self, title, url, res_url, format):
         if url == '':
