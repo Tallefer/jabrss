@@ -894,7 +894,14 @@ class JabRSSStream(XmppStream):
         self._term, self._term_flag = threading.Event(), False
 
         handlers = {
+            ('iq', 'get', '{http://jabber.org/protocol/disco#info}query') : self.iq_get_disco,
+            ('iq', 'get', '{jabber:iq:last}query') : self.iq_get_last,
+            ('iq', 'get', '{urn:xmpp:ping}ping') : self.iq_get_ping,
+            ('iq', 'get', '{jabber:iq:time}query') : self.iq_get_time_jabber,
+            ('iq', 'get', '{urn:xmpp:time}time') : self.iq_get_time,
+            ('iq', 'get', '{jabber:iq:version}query') : self.iq_get_version,
             ('iq', 'get') : self.iq_get,
+            ('iq', 'set', '{jabber:iq:roster}query') : self.iq_set_roster,
             ('iq', 'set') : self.iq_set,
             ('message', 'normal') : self.message,
             ('message', 'chat') : self.message,
@@ -1032,7 +1039,95 @@ class JabRSSStream(XmppStream):
         if iq_id != None:
             reply = Stanza.Iq(id=iq_id, type='error',
                               from_=iq.get_to(), to=iq_from)
+            error = reply.create_error(type='cancel')
+            error.append(Element('{urn:ietf:params:xml:ns:xmpp-stanzas}service-unavailable'))
             self.send(reply.asbytes(self._encoding))
+
+    def iq_get_disco(self, iq):
+        log_message('iq get disco', iq.get_from().tostring())
+        iq_id = iq.get_id()
+        if iq_id != None:
+            reply = Stanza.Iq(id=iq_id, type='result',
+                              from_=iq.get_to(), to=iq.get_from())
+            disco = reply.create_query('http://jabber.org/protocol/disco#info')
+
+            identity = Element('{http://jabber.org/protocol/disco#info}identity')
+            identity.set('category', 'client')
+            identity.set('type', 'bot')
+            disco.append(identity)
+
+            for fvar in ('http://jabber.org/protocol/disco#info',
+                         'jabber:iq:last', 'jabber:iq:time',
+                         'jabber:iq:version',
+                         'urn:xmpp:ping', 'urn:xmpp:time'):
+                feature = Element('{http://jabber.org/protocol/disco#info}feature')
+                feature.set('var', fvar)
+                disco.append(feature)
+            self.send(reply.asbytes(self._encoding))
+
+    def iq_get_last(self, iq):
+        log_message('iq get last', iq.get_from().tostring())
+        iq_id = iq.get_id()
+        if iq_id != None:
+            reply = Stanza.Iq(id=iq_id, type='result',
+                              from_=iq.get_to(), to=iq.get_from())
+            last = reply.create_query('jabber:iq:last')
+            last.set('seconds', '0')
+            self.send(reply.asbytes(self._encoding))
+
+    def iq_get_ping(self, iq):
+        log_message('iq get ping', iq.get_from().tostring())
+        iq_id = iq.get_id()
+        if iq_id != None:
+            reply = Stanza.Iq(id=iq_id, type='result',
+                              from_=iq.get_to(), to=iq.get_from())
+            self.send(reply.asbytes(self._encoding))
+
+    def iq_get_time_jabber(self, iq):
+        log_message('iq get time', iq.get_from().tostring())
+        iq_id = iq.get_id()
+        if iq_id != None:
+            reply = Stanza.Iq(id=iq_id, type='result',
+                              from_=iq.get_to(), to=iq.get_from())
+            time_elem = reply.create_query('jabber:iq:time')
+            utc = Element('{jabber:iq:time}utc')
+            utc.text = time.strftime('%Y%m%dT%H:%M:%S', time.gmtime())
+            time_elem.append(utc)
+            self.send(reply.asbytes(self._encoding))
+
+    def iq_get_time(self, iq):
+        log_message('iq get time', iq.get_from().tostring())
+        iq_id = iq.get_id()
+        if iq_id != None:
+            reply = Stanza.Iq(id=iq_id, type='result',
+                              from_=iq.get_to(), to=iq.get_from())
+            time_elem = reply.create_child('urn:xmpp:time', 'time')
+            tzo = Element('{urn:xmpp:time}tzo')
+            tzo.text = '-00:00'
+            time_elem.append(tzo)
+            utc = Element('{urn:xmpp:time}utc')
+            utc.text = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            time_elem.append(utc)
+            self.send(reply.asbytes(self._encoding))
+
+    def iq_get_version(self, iq):
+        log_message('iq get version', iq.get_from().tostring())
+        iq_id = iq.get_id()
+        if iq_id != None:
+            reply = Stanza.Iq(id=iq_id, type='result',
+                              from_=iq.get_to(), to=iq.get_from())
+            version = reply.create_query('jabber:iq:version')
+            version_name = Element('{jabber:iq:version}name')
+            version_name.text = 'JabRSS'
+            version.append(version_name)
+            version_version = Element('{jabber:iq:version}version')
+            version_version.text = '0.x'
+            version.append(version_version)
+            version_os = Element('{jabber:iq:version}os')
+            version_os.text = 'Linux'
+            version.append(version_os)
+            self.send(reply.asbytes(self._encoding))
+
 
     def iq_set(self, iq):
         logmsg = ['iq set']
@@ -1046,21 +1141,22 @@ class JabRSSStream(XmppStream):
             logmsg.append(query.tag)
         log_message(' '.join(logmsg))
 
-        if query != None:
-            if query.tag == '{jabber:iq:roster}query':
-                item = query.find('{jabber:iq:roster}item')
-                if item != None:
-                    self.roster_updated(item)
-                    if iq_id != None:
-                        reply = Stanza.Iq(id=iq_id, type='result',
-                                          from_=iq.get_to(), to=iq_from)
-                        self.send(reply.asbytes(self._encoding))
-                    return
-
         if iq_id != None:
             reply = Stanza.Iq(id=iq_id, type='error',
                               from_=iq.get_to(), to=iq_from)
+            error = reply.create_error(type='cancel')
+            error.append(Element('{urn:ietf:params:xml:ns:xmpp-stanzas}service-unavailable'))
             self.send(reply.asbytes(self._encoding))
+
+    def iq_set_roster(self, iq):
+        iq_id, query = iq.get_id(), iq.get_query()
+        item = query.find('{jabber:iq:roster}item')
+        if item != None:
+            self.roster_updated(item)
+            if iq_id != None:
+                reply = Stanza.Iq(id=iq_id, type='result',
+                                  from_=iq.get_to(), to=iq.get_from())
+                self.send(reply.asbytes(self._encoding))
 
     def session_start(self):
         log_message('session start')
