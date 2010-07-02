@@ -1432,8 +1432,19 @@ class JabRSSStream(XmppStream):
                 self.send(reply.asbytes(self._encoding))
 
 
-    def _remove_user(self, jid, send_unsubscribed=True):
-        bare_jid = jid.bare()
+    def _remove_user(self, jid, send_unsubscribed=True, use_bare_jid=True):
+        if use_bare_jid:
+            bare_jid = jid.bare()
+        else:
+            bare_jid = jid
+
+        presence = Stanza.Presence(to = bare_jid, type = 'unsubscribe')
+        self.send(presence.asbytes(self._encoding))
+
+        if send_unsubscribed:
+            presence = Stanza.Presence(to = bare_jid, type = 'unsubscribed')
+            self.send(presence.asbytes(self._encoding))
+
         self._roster_id += 1
         iq = Stanza.Iq(type='set', id='r%d' % (self._roster_id,))
         query = iq.create_query('jabber:iq:roster')
@@ -1442,13 +1453,6 @@ class JabRSSStream(XmppStream):
         item.set('subscription', 'remove')
         query.append(item)
         self.send(iq.asbytes(self._encoding))
-
-        presence = Stanza.Presence(to = bare_jid, type = 'unsubscribe')
-        self.send(presence.asbytes(self._encoding))
-
-        if send_unsubscribed:
-            presence = Stanza.Presence(to = bare_jid, type = 'unsubscribed')
-            self.send(presence.asbytes(self._encoding))
 
 
     # delete all user information from database and evict user
@@ -1630,19 +1634,23 @@ class JabRSSStream(XmppStream):
         if type(item) in (types.ListType, types.TupleType):
             subscribers = {}
             for elem in item:
-                jid, subscription = elem.get('jid'), elem.get('subscription')
+                user, subscription = elem.get('jid'), elem.get('subscription')
                 if subscription == 'both':
-                    subscribers[jid.lower()] = True
+                    subscribers[user.lower()] = True
                 else:
-                    log_message('subscription for user "%s" is "%s" (!= "both")' % (jid, subscription))
-                    self._remove_user(jid)
+                    log_message('subscription for user "%s" is "%s" (!= "both")' % (user, subscription))
+                    jid = JID(user)
+                    self._remove_user(jid, True, False)
+                    if jid.resource() == None:
+                        self._delete_user(jid)
 
             cursor = Cursor(db)
-            result = cursor.execute('SELECT jid FROM user')
+            result = cursor.execute('SELECT jid, uid FROM user')
             delete_users = []
-            for row in result:
-                username = row[0]
-                if not subscribers.has_key(username):
+            for username, uid in result:
+                if username.find('/') != -1:
+                    storage.remove_user(uid)
+                elif not subscribers.has_key(username):
                     delete_users.append(username)
                 else:
                     subscribers[username] = False
