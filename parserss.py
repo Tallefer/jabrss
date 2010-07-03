@@ -1432,7 +1432,7 @@ class Feed_Parser(xmllib.XMLParser):
         try:
             self._append_cdata(ENTITIES[entity].decode('iso8859-1'))
         except KeyError:
-            logger.info('ignoring unknown entity ref' % (entity,))
+            logger.info('ignoring unknown entity ref %s' % (entity,))
 
     def _current_elem(self):
         if self._state & 0x08:
