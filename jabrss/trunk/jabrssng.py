@@ -624,7 +624,7 @@ class JabberUser:
     def _update_configuration(self):
         cursor = Cursor(db)
         cursor.execute('UPDATE user SET conf=?, store_messages=?, size_limit=? WHERE uid=?',
-                       (self._configuration, self._store_messages, self._size_limit / 16, self._uid))
+                       (self._configuration, self._store_messages, self._size_limit // 16, self._uid))
         del cursor
 
     def set_configuration(self, conf, store_messages, size_limit):
@@ -891,6 +891,7 @@ class JabRSSStream(XmppStream):
 
         self._io_sync = threading.Lock()
         self._roster_id, self._sock, self._encoding = 0, None, 'utf-8'
+        self._online = False
         self._term, self._term_flag = threading.Event(), False
 
         handlers = {
@@ -922,7 +923,7 @@ class JabRSSStream(XmppStream):
     def _stream_closed(self):
         storage.evict_all_users()
         sock = self._sock
-        self._sock = None
+        self._sock, self._online = None, False
         return sock
 
 
@@ -1172,7 +1173,29 @@ class JabRSSStream(XmppStream):
         log_message('sending presence')
         presence = Stanza.Presence()
         self.send(presence.asbytes(self._encoding))
+        self._online = True
         return
+
+    def update_presence(self):
+        if self._online:
+            presence = Stanza.Presence()
+
+            total_users, total_resources = 0, 0
+            cursor = Cursor(db)
+            try:
+                result = cursor.execute('SELECT (SELECT COUNT(uid) FROM user), (SELECT COUNT(DISTINCT rid) FROM user_resource)')
+                for total_users, total_resources in result:
+                    pass
+            finally:
+                del cursor
+
+            presence.set_status('%d/%d users, %d/%d feeds' %
+                                (len(storage._users) // 2,
+                                 total_users,
+                                 len(storage._resources) // 2,
+                                 total_resources))
+            self.send(presence.asbytes(self._encoding))
+
 
     def unhandled_stanza(self, stanza):
         log_message('unhandled stanza', stanza.tag())
@@ -1344,28 +1367,20 @@ class JabRSSStream(XmppStream):
 
 
     def _process_statistics(self, stanza, user):
-        cursor = Cursor(db)
         reply_body = ['Statistics:']
-
+        total_users, total_resources = 0, 0
+        cursor = Cursor(db)
         try:
-            result = cursor.execute('SELECT count(uid) FROM user')
-
-            total_users = 0
-            for row in result:
-                total_users = row[0]
-
-            result = cursor.execute('SELECT count(rid) FROM (SELECT DISTINCT rid FROM user_resource)')
-
-            total_resources = 0
-            for row in result:
-                total_resources = row[0]
+            result = cursor.execute('SELECT (SELECT COUNT(uid) FROM user), (SELECT COUNT(DISTINCT rid) FROM user_resource)')
+            for total_users, total_resources in result:
+                pass
         finally:
             del cursor
 
         reply_body.append('Users online/total: %d/%d' %
-                          (len(storage._users) / 2, total_users))
+                          (len(storage._users) // 2, total_users))
         reply_body.append('RDF feeds used/total: %d/%d' %
-                          (len(storage._resources) / 2, total_resources))
+                          (len(storage._resources) // 2, total_resources))
 
         reply = Stanza.Message(to = stanza.get_from(),
                                type = stanza.get_type(),
@@ -1391,7 +1406,7 @@ class JabRSSStream(XmppStream):
                 month1, day1 = time.gmtime(time_base)[1:3]
                 month2, day2 = time.gmtime(time_base + 6*24*60*60)[1:3]
                 if size > 11*1024:
-                    size_str = '%d kiB' % (size / 1024,)
+                    size_str = '%d kiB' % (size // 1024,)
                 else:
                     size_str = '%d Bytes' % (size,)
                 reply_body.append('%d/%d - %d/%d: %d headlines (%s)' % (day1, month1, day2, month2, nr, size_str))
@@ -1495,7 +1510,7 @@ class JabRSSStream(XmppStream):
                 if len(history):
                     text.append('Last updated: %s GMT' % (time.asctime(time.gmtime(history[-1][0])),))
                 text.append('Next poll: ca. %s GMT' % (time.asctime(time.gmtime(next_update)),))
-                text.append('Update interval: ~%d min' % ((next_update - last_updated) / 60,))
+                text.append('Update interval: ~%d min' % ((next_update - last_updated) // 60,))
                 text.append('Feed penalty: %d (out of 1024)' % (penalty,))
 
                 if invalid_since:
@@ -2170,26 +2185,19 @@ def console_handler(bot):
                 except KeyError:
                     log_message('user not online')
             elif s == 'statistics':
+                total_users, total_resources = 0, 0
                 cursor = Cursor(db)
-
                 try:
-                    result = cursor.execute('SELECT count(uid) FROM user')
-
-                    total_users = 0
-                    for row in result:
-                        total_users = row[0]
-
-                    result = cursor.execute('SELECT count(rid) FROM (SELECT DISTINCT rid FROM user_resource)')
-
-                    total_resources = 0
-                    for row in result:
-                        total_resources = row[0]
+                    result = cursor.execute('SELECT (SELECT COUNT(uid) FROM user), (SELECT COUNT(DISTINCT rid) FROM user_resource)')
+                    for total_users, total_resources in result:
+                        pass
                 finally:
                     del cursor
 
-                log_message('Users online/total: %d/%d' % (len(storage._users) / 2,
-                                                           total_users))
-                log_message('RDF feeds used/total: %d/%d' % (len(storage._resources) / 2, total_resources))
+                log_message('Users online/total: %d/%d' %
+                            (len(storage._users) // 2, total_users))
+                log_message('RDF feeds used/total: %d/%d' %
+                            (len(storage._resources) // 2, total_resources))
 
             elif s == 'shutdown':
                 break
@@ -2226,7 +2234,7 @@ thread.start_new_thread(bot.run, ())
 thread.start_new_thread(console_handler, (bot,))
 
 
-last_attempt, last_idled = 0, 0
+last_attempt, last_presence = 0, int(time.time()) - 600
 while not bot.terminated():
     if last_attempt != 0:
         delay = 15
@@ -2247,6 +2255,11 @@ while not bot.terminated():
             sock = bot.sock()
             if sock == None:
                 break
+
+            now = int(time.time())
+            if last_presence + 900 < now:
+                bot.update_presence()
+                last_presence = now
 
             data = sock.recv(4096)
             logger.debug('<<< ' + repr(data))
