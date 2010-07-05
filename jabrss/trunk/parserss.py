@@ -1384,7 +1384,7 @@ class Feed_Parser(xmllib.XMLParser):
     def _append_cdata(self, data):
         if self._cdata != None:
             self._cdatalen += len(data)
-            if self._cdatalen > 64 * 1024:
+            if self._cdatalen > 128 * 1024:
                 raise ValueError('item exceeds maximum allowed size')
 
             if len(self._cdata):
@@ -1754,7 +1754,7 @@ class RSS_Resource:
                     l = response.read(4096)
                     while l:
                         bytes_received = bytes_received + len(l)
-                        if bytes_received > 384 * 1024:
+                        if bytes_received > 512 * 1024:
                             raise ValueError('file exceeds maximum allowed size')
 
                         data = decoder.feed(l)
@@ -1766,7 +1766,7 @@ class RSS_Resource:
                                 xml_started = 1
 
                         bytes_processed = bytes_processed + len(data)
-                        if bytes_processed > 512 * 1024:
+                        if bytes_processed > 1024 * 1024:
                             raise ValueError('file exceeds maximum allowed decompressed size')
 
                         rss_parser.feed(data)
