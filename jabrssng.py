@@ -1660,15 +1660,18 @@ class JabRSSStream(XmppStream):
     def presence_available(self, stanza):
         sender, typ, status, show = (stanza.get_from(), stanza.get_type(),
                                      stanza.get_status(), stanza.get_show())
-        log_message('presence', sender.tostring(), typ, show)
-
         try:
             presence = [None, 'chat', 'away', 'xa', 'dnd'].index(show)
         except ValueError:
             return
 
         user, jid_resource = storage.load_user(sender, presence)
-        if (user != None) and user.get_delivery_state(presence):
+        if user == None:
+            log_message('presence ignored', sender.tostring(), show)
+        elif not user.get_delivery_state(presence):
+            log_message('presence', sender.tostring(), show)
+        else:
+            log_message('presence', sender.tostring(), show)
             subs = None
 
             for res_id in user.resources()[:]:
@@ -1716,7 +1719,7 @@ class JabRSSStream(XmppStream):
     def presence_unavailable(self, stanza):
         sender, typ, status, show = (stanza.get_from(), stanza.get_type(),
                                      stanza.get_status(), stanza.get_show())
-        log_message('presence', sender.tostring(), typ, show)
+        log_message('presence', sender.tostring(), typ)
         try:
             user, jid_resource = storage.get_user(sender)
             user.set_presence(jid_resource, -1)
