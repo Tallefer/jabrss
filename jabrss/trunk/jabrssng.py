@@ -363,7 +363,7 @@ class DataStorage:
     def get_user_by_id(self, uid):
         return self._users[uid]
 
-    def get_new_user(self, jid, presence_show):
+    def load_user(self, jid, presence_show, create=False):
         key = jid.bare().tostring().lower()
         jid_resource = jid.resource()
         if presence_show == None:
@@ -376,7 +376,10 @@ class DataStorage:
             user.set_presence(jid_resource, presence_show)
             return user, jid_resource
         except KeyError:
-            user = JabberUser(key, jid_resource, presence_show)
+            try:
+                user = JabberUser(key, jid_resource, presence_show, create)
+            except KeyError:
+                return None, None
 
             users_unlocker = self.users_lock()
             self._users[key] = user
@@ -473,7 +476,7 @@ class JabberUser:
     #
     # self._unknown_msgs .. number of unknown messages received
     ##
-    def __init__(self, jid, jid_resource, show=None):
+    def __init__(self, jid, jid_resource, show=None, create=False):
         self._jid = jid
         if jid_resource != None:
             self._jid_resources = {jid_resource : show}
@@ -492,6 +495,9 @@ class JabberUser:
                        (self._jid,))
             self._uid, self._configuration, self._store_messages, self._size_limit = cursor.next()
         except StopIteration:
+            if not create:
+                raise KeyError(jid)
+
             cursor.execute('INSERT INTO user (jid, conf, store_messages, size_limit, since) VALUES (?, ?, ?, ?, ?)',
                            (self._jid, self._configuration, self._store_messages, self._size_limit, get_week_nr()))
             self._uid = cursor.lastrowid
@@ -910,10 +916,10 @@ class JabRSSStream(XmppStream):
             ('presence', None) : self.presence_available,
             ('presence', 'unavailable') : self.presence_unavailable,
             ('presence', 'error') : self.presence_unavailable,
-            ('presence', 'subscribe') : self.presence_control,
-            ('presence', 'subscribed') : self.presence_control,
-            ('presence', 'unsubscribe') : self.presence_control,
-            ('presence', 'unsubscribed') : self.presence_control,
+            ('presence', 'subscribe') : self.presence_subscribe,
+            ('presence', 'subscribed') : self.presence_subscribed,
+            ('presence', 'unsubscribe') : self.presence_unsubscribe,
+            ('presence', 'unsubscribed') : self.presence_unsubscribed,
             }
         XmppStream.__init__(self, self.jid, handlers,
                             encoding=self._encoding,
@@ -1573,10 +1579,13 @@ class JabRSSStream(XmppStream):
 
     # delete all user information from database and evict user
     def _delete_user(self, jid):
-        try:
-            user, jid_resource = storage.get_new_user(jid, None)
-            log_message('deleting user\'s %s subscriptions: %s' % (jid.tostring(), repr(user.resources())))
-            for res_id in user.resources():
+        user, jid_resource = storage.load_user(jid, None)
+        if user == None:
+            return
+
+        log_message('deleting user\'s %s subscriptions: %s' % (jid.tostring(), repr(user.resources())))
+        for res_id in user.resources():
+            try:
                 resource = storage.get_resource_by_id(res_id)
                 resource.lock()
                 try:
@@ -1586,10 +1595,10 @@ class JabRSSStream(XmppStream):
                         pass
                 finally:
                     resource.unlock()
+            except KeyError:
+                traceback.print_exc(file=sys.stdout)
 
-            storage.remove_user(user)
-        except KeyError:
-            traceback.print_exc(file=sys.stdout)
+        storage.remove_user(user)
 
 
     def message(self, stanza):
@@ -1658,8 +1667,8 @@ class JabRSSStream(XmppStream):
         except ValueError:
             return
 
-        user, jid_resource = storage.get_new_user(sender, presence)
-        if user.get_delivery_state(presence):
+        user, jid_resource = storage.load_user(sender, presence)
+        if (user != None) and user.get_delivery_state(presence):
             subs = None
 
             for res_id in user.resources()[:]:
@@ -1717,33 +1726,48 @@ class JabRSSStream(XmppStream):
         except KeyError:
             pass
 
-    def presence_control(self, stanza):
+    def presence_subscribe(self, stanza):
         reply = []
         sender, typ = stanza.get_from(), stanza.get_type()
         log_message('presence_control', sender.tostring(), typ)
 
-        if typ == 'subscribe':
-            msg_text = TEXT_WELCOME
-            try:
-                storage.get_user(sender)
-            except KeyError:
-                msg_text += TEXT_NEWUSER
+        msg_text = TEXT_WELCOME
+        try:
+            storage.get_user(sender)
+        except KeyError:
+            msg_text += TEXT_NEWUSER
 
-            msg =  Stanza.Message(to = stanza.get_from(),
-                                  type = 'normal',
-                                  body = msg_text)
-            self.send(msg.asbytes(self._encoding))
+        msg =  Stanza.Message(to = stanza.get_from(),
+                              type = 'normal',
+                              body = msg_text)
+        self.send(msg.asbytes(self._encoding))
 
-            reply = Stanza.Presence(to = stanza.get_from(),
-                                    type = 'subscribed')
-            self.send(reply.asbytes(self._encoding))
+        reply = Stanza.Presence(to = stanza.get_from(),
+                                type = 'subscribed')
+        self.send(reply.asbytes(self._encoding))
 
-            subscr = Stanza.Presence(to = stanza.get_from(),
-                                     type = 'subscribe')
-            self.send(subscr.asbytes(self._encoding))
-        if typ == 'unsubscribed':
-            self._unsubscribe_user(sender.bare(), False)
-            self._remove_user(sender.bare())
+        subscr = Stanza.Presence(to = stanza.get_from(),
+                                 type = 'subscribe')
+        self.send(subscr.asbytes(self._encoding))
+
+    def presence_subscribed(self, stanza):
+        reply = []
+        sender, typ = stanza.get_from(), stanza.get_type()
+        log_message('presence subscribed', sender.tostring(), typ)
+        storage.load_user(sender, None, True)
+
+    def presence_unsubscribe(self, stanza):
+        reply = []
+        sender, typ = stanza.get_from(), stanza.get_type()
+        log_message('presence unsubscribe', sender.tostring(), typ)
+        self._unsubscribe_user(sender.bare())
+
+    def presence_unsubscribed(self, stanza):
+        reply = []
+        sender, typ = stanza.get_from(), stanza.get_type()
+        log_message('presence unsubscribed', sender.tostring(), typ)
+        self._unsubscribe_user(sender.bare(), False)
+        self._remove_user(sender.bare())
 
 
     def roster_updated(self, item):
