@@ -108,7 +108,7 @@ def tobytes(node, encoding='utf-8'):
             self._data = []
 
         def data(self):
-            return b''.join(self._data)
+            return ''.encode('ascii').join(self._data)
 
         def write(self, data):
             self._data.append(_evil_characters.sub(' ', data).encode(self._encoding))

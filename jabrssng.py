@@ -934,7 +934,21 @@ class JabRSSStream(XmppStream):
 
 
     def connect(self):
-        self._sock = socket.create_connection((self._host, self._port))
+        # resolve addresses manually for compatibility with Python 2.5
+        # which doesn't support create_connection
+        exc = socket.gaierror(-2, 'Name or service not known')
+        for ai in socket.getaddrinfo(self._host, self._port, socket.AF_UNSPEC, socket.SOCK_STREAM):
+            try:
+                exc = None
+                self._sock = socket.socket(ai[0], ai[1], ai[2])
+                self._sock.connect(ai[4])
+                break
+            except socket.error, e:
+                exc = e
+
+        if exc != None:
+            raise exc
+
         log_message('connected to', self._sock.getpeername())
         self._sock.settimeout(600)
         XmppStream.connect(self)
