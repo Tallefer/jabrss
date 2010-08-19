@@ -941,6 +941,7 @@ class JabRSSStream(XmppStream):
             try:
                 exc = None
                 self._sock = socket.socket(ai[0], ai[1], ai[2])
+                self._sock.settimeout(30)
                 self._sock.connect(ai[4])
                 break
             except socket.error, e:
