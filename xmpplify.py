@@ -18,7 +18,7 @@
 
 import base64, re, threading, types
 
-from xml.etree.cElementTree import Element, TreeBuilder, XMLTreeBuilder
+from xml.etree.cElementTree import Element, XMLTreeBuilder
 
 
 __all__ = [
