@@ -1497,6 +1497,8 @@ class JabRSSStream(XmppStream):
 
                 log_message(user.jid(), 'unsubscribed from', url)
                 reply_body = 'You have been unsubscribed from %s' % (url,)
+            except UrlError, url_error:
+                reply_body = 'Invalid URL %s (%s)' % (url, url_error.args[0])
             except KeyError:
                 reply_body = 'For some reason you couldn\'t be unsubscribed from %s' % (url,)
             except ValueError:
@@ -1561,6 +1563,8 @@ class JabRSSStream(XmppStream):
                     text.append('Frequency: ~%d headlines per %s' % (msg_rate, rate_unit))
 
                 reply_body = '\n'.join(text)
+            except UrlError, url_error:
+                reply_body = 'Invalid URL %s (%s)' % (url, url_error.args[0])
             except KeyError:
                 reply_body = 'No information available about %s' % (url,)
 
