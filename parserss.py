@@ -17,7 +17,7 @@
 # USA
 
 import codecs, hashlib, logging, rfc822, os, random, re, socket, string, struct
-import sys, time, threading, traceback, types, zlib
+import sys, time, threading, traceback, types, urlparse, zlib
 import sqlite3
 
 from array import array
@@ -43,12 +43,8 @@ __all__ = [
     'UrlError', 'init_parserss',
 ]
 
-re_validprotocol = re.compile('^(?P<protocol>[a-z]+):(?P<rest>.*)$')
-
-re_validhost = re.compile('^(?P<host>[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+)(:(?P<port>[0-9a-z]+))?(?P<path>(/.*)?)$')
+re_validhost = re.compile('^(?P<host>[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+)$')
 re_blockhost = re.compile('^(10\.|127\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168\.)')
-
-re_spliturl = re.compile('^(?P<protocol>[a-z]+)://(?P<host>[^/]+)(?P<path>/?.*)$')
 
 str_trans = string.maketrans(
     '\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f' +
@@ -109,29 +105,29 @@ class UrlError(ValueError):
     pass
 
 def split_url(url):
-    mo = re_validprotocol.match(url)
-    if not mo:
-        raise UrlError('can\'t parse protocol of URL "%s"' % (url,))
+    u = urlparse.urlsplit(url)
 
-    url_protocol, url_rest = mo.group('protocol', 'rest')
+    url_protocol = u.scheme
 
-    if url_rest[:2] != '//':
-        raise UrlError('missing "//" after "%s:"' % (url_protocol,))
+    netloc_comp = u.netloc.split(':', 2)
+    url_host = netloc_comp[0].lower()
+    if len(netloc_comp) >= 2:
+        url_port = netloc_comp[1]
+    else:
+        url_port = None
 
-    url_rest = url_rest[2:]
-    mo = re_validhost.match(url_rest)
-    if not mo:
-        raise UrlError('invalid host in URL "%s"' % (url,))
+    url_path = u.path
+    if u.query:
+        url_path += '?' + u.query
 
-    url_host, url_port, url_path = mo.group('host', 'port', 'path')
-
-    url_host = url_host.lower()
+    if not re_validhost.match(url_host):
+        raise UrlError('invalid host in URL "%s"' % (url_host,))
 
     if url_protocol == 'http':
-        if (url_port != '80') and (url_port != 'http') and (url_port != None):
+        if (url_port != None) and (url_port != '80') and (url_port != 'http'):
             raise UrlError('http ports != 80 not allowed')
     elif url_protocol == 'https':
-        if (url_port != '443') and (url_port != 'https') and (url_port != None):
+        if (url_port != None) and (url_port != '443') and (url_port != 'https'):
             raise UrlError('https ports != 443 not allowed')
     else:
         raise UrlError('unsupported protocol "%s"' % (url_protocol))
@@ -229,41 +225,39 @@ def compare_items(l, r):
         if (lguid != None) and (rguid != None):
             return lguid == rguid
 
-        lmo = re_spliturl.match(llink)
-        rmo = re_spliturl.match(rlink)
+        lurl = urlparse.urlsplit(llink)
+        rurl = urlparse.urlsplit(rlink)
 
-        if lmo and rmo:
-            lprotocol, lhost, lpath = lmo.group('protocol', 'host', 'path')
-            rprotocol, rhost, rpath = rmo.group('protocol', 'host', 'path')
+        lprotocol, lhost, lpath = lmo.group('protocol', 'host', 'path')
+        rprotocol, rhost, rpath = rmo.group('protocol', 'host', 'path')
 
-            if lprotocol == rprotocol and lpath == rpath:
-                lhostparts = string.split(string.lower(lhost), '.')
-                if lhostparts[-1] == '':
-                    del lhostparts[-1]
+        if lurl.scheme == rurl.scheme and lurl.path == rurl.path and \
+                lurl.query == rurl.query and lurl.fragment == rurl.fragment:
+            lhostparts = string.split(lurl.netloc.lower(), '.')
+            if lhostparts[-1] == '':
+                del lhostparts[-1]
 
-                rhostparts = string.split(string.lower(rhost), '.')
-                if rhostparts[-1] == '':
-                    del rhostparts[-1]
+            rhostparts = string.split(rurl.netloc.lower(), '.')
+            if rhostparts[-1] == '':
+                del rhostparts[-1]
 
-                if len(lhostparts) >= 2:
-                    del lhostparts[-1]
-                if len(rhostparts) >= 2:
-                    del rhostparts[-1]
+            if len(lhostparts) >= 2:
+                del lhostparts[-1]
+            if len(rhostparts) >= 2:
+                del rhostparts[-1]
 
-                if len(lhostparts) > len(rhostparts):
-                    tmp = lhostparts
-                    lhostparts = rhostparts
-                    rhostparts = tmp
-                    del tmp
+            if len(lhostparts) > len(rhostparts):
+                tmp = lhostparts
+                lhostparts = rhostparts
+                rhostparts = tmp
+                del tmp
 
-                if len(lhostparts) == len(rhostparts):
-                    return lhostparts == rhostparts
-                else:
-                    return lhostparts == rhostparts[-len(lhostparts):]
+            if len(lhostparts) == len(rhostparts):
+                return lhostparts == rhostparts
             else:
-                return 0
+                return lhostparts == rhostparts[-len(lhostparts):]
         else:
-            return llink == rlink
+            return 0
     else:
         return 0
 
@@ -1825,13 +1819,8 @@ class RSS_Resource:
 
                     redirect_url = headers.get('location', None)
                     if redirect_url:
-                        if not re_validprotocol.match(redirect_url):
-                            base_url = '%s://%s' % (url_protocol, url_host)
-                            if redirect_url[0] != '/':
-                                redirect_url = url_path[:url_path.rindex('/')] + '/' + redirect_url
-
-                            redirect_url = base_url + redirect_url
-
+                        base_url = '%s://%s/%s' % (url_protocol, url_host, url_path)
+                        redirect_url = urlparse.urljoin(base_url, redirect_url)
                         logger.info('Following redirect (%d) to "%s"' % (errcode, redirect_url))
                         url_protocol, url_host, url_path = split_url(redirect_url)
                         redirect_tries = -redirect_tries
