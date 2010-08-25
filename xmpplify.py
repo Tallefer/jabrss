@@ -18,7 +18,7 @@
 
 import base64, re, threading, types
 
-from xml.etree.cElementTree import Element, XMLTreeBuilder
+from xml.etree.cElementTree import Element, XMLParser
 
 
 __all__ = [
@@ -446,7 +446,7 @@ class XmppStream:
         self.__jid, self.__password = jid, password
         self.__prefer_tls = prefer_tls
         self.__handlers, self.__encoding = handlers, encoding
-        self.__synced_feeder, self.__tb, self.__stream_open = None, None, False
+        self.__synced_feeder, self.__parser, self.__stream_open = None, None, False
 
         self.__iq_handlers = {}
         self.__iq_handler_sync = threading.Lock()
@@ -515,7 +515,7 @@ class XmppStream:
 
 
     def connect(self):
-        self.__tb = XMLTreeBuilder(target=XmppHandler(self))
+        self.__parser = XMLParser(target=XmppHandler(self))
         self.send(('<?xml version=\'1.0\'?><stream:stream xmlns:stream="http://etherx.jabber.org/streams" xmlns="jabber:client" to="%s" version="1.0">' % (_escape_attrib(self.__jid.domain()),)).encode(self.__encoding))
         self.__stream_open = True
 
@@ -525,12 +525,12 @@ class XmppStream:
             self.send('</stream:stream>'.encode(self.__encoding))
 
     def feed(self, data):
-        self.__tb.feed(data)
+        self.__parser.feed(data)
 
     def close(self):
-        self.__tb.close()
-        if self.__tb != None:
-            self.__synced_feeder, self.__tb = None, None
+        self.__parser.close()
+        if self.__parser != None:
+            self.__synced_feeder, self.__parser = None, None
             self.closed()
 
 
