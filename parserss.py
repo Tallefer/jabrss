@@ -872,7 +872,7 @@ class Feed_Parser:
             descr = typedtext(elem.find(ns + 'tagline'))
             link = findattr(elem.findall(ns + 'link'),
                             'href', 'rel',
-                            ['via', 'related', 'alternate', 'enclosure'],
+                            ['via', 'related', 'enclosure', 'alternate'],
                             'alternate')
             guid = elem.findtext(ns + 'id')
             published = parse_dateTime(elem.findtext(ns + 'created') or \
@@ -893,7 +893,7 @@ class Feed_Parser:
                                        'text'))
             link = findattr(elem.findall(ns + 'link'),
                             'href', 'rel',
-                            ['via', 'related', 'alternate', 'enclosure'],
+                            ['via', 'related', 'enclosure', 'alternate'],
                             'alternate')
             guid = elem.findtext(ns + 'id')
             published = parse_dateTime(elem.findtext(ns + 'created') or \
@@ -927,7 +927,7 @@ class Feed_Parser:
             descr = typedtext(elem.find(ns + 'subtitle'))
             link = findattr(elem.findall(ns + 'link'),
                             'href', 'rel',
-                            ['via', 'related', 'alternate', 'enclosure'],
+                            ['via', 'related', 'enclosure', 'alternate'],
                             'alternate')
             guid = elem.findtext(ns + 'id')
             published = parse_dateTime(elem.findtext(ns + 'published') or \
@@ -948,7 +948,7 @@ class Feed_Parser:
                                        'text'))
             link = findattr(elem.findall(ns + 'link'),
                             'href', 'rel',
-                            ['via', 'related', 'alternate', 'enclosure'],
+                            ['via', 'related', 'enclosure', 'alternate'],
                             'alternate')
             guid = elem.findtext(ns + 'id')
             published = parse_dateTime(elem.findtext(ns + 'published') or \
