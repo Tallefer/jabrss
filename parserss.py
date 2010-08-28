@@ -16,23 +16,33 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
-import codecs, hashlib, logging, rfc822, os, random, re, socket, string, struct
-import sys, time, threading, traceback, types, urlparse, zlib
+import codecs, hashlib, logging, random, re, socket, string, struct
+import sys, time, threading, traceback, zlib
 import sqlite3
 
-from array import array
+from email.utils import formatdate, mktime_tz, parsedate_tz
 
-import warnings
-warnings.filterwarnings('ignore',
-                        category=DeprecationWarning,
-                        message='The xmllib module is obsolete.  Use xml.sax instead.')
-import xmllib
+try:
+    from lxml.etree import Element, XMLParser
+except ImportError:
+    try:
+        from xml.etree.cElementTree import Element, XMLParser
+    except ImportError:
+        from xml.etree.ElementTree import Element, XMLParser
 
 if sys.version_info[0] == 2:
     import httplib
+    from HTMLParser import HTMLParser
+    from htmlentitydefs import name2codepoint
+    from StringIO import StringIO
+    from urlparse import urlsplit, urljoin
 else:
     import http.client as httplib
-
+    from html.parser import HTMLParser
+    from html.entities import name2codepoint
+    from io import StringIO
+    from urllib.parse import urlsplit, urljoin
+    unichr = chr
 
 logger = logging.getLogger('parserss')
 
@@ -46,10 +56,22 @@ __all__ = [
 re_validhost = re.compile('^(?P<host>[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+)$')
 re_blockhost = re.compile('^(10\.|127\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168\.)')
 
-str_trans = string.maketrans(
-    '\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f' +
-    '\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f',
-    '          \x0a                     ')
+if sys.version_info[0] == 2:
+    str_trans = string.maketrans(
+        '\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f' \
+            '\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f' \
+            ''.encode('ascii'),
+        '          \x0a                     '.encode('ascii'))
+
+    def byteliteral(b):
+        return b
+else:
+    def byteliteral(b):
+        return b.encode('latin1')
+
+    str_trans = None
+    def buffer(b):
+        return b
 
 unicode_trans = {
     0x00 : 0x20, 0x01 : 0x20, 0x02 : 0x20, 0x03 : 0x20,
@@ -105,7 +127,7 @@ class UrlError(ValueError):
     pass
 
 def split_url(url):
-    u = urlparse.urlsplit(url)
+    u = urlsplit(url)
 
     url_protocol = u.scheme
 
@@ -145,12 +167,12 @@ def split_url(url):
 
 
 def normalize_text(s):
-    if type(s) == types.UnicodeType:
+    if type(s) == type(byteliteral('').decode('ascii')):
         s = s.translate(unicode_trans)
     else:
         s = s.translate(str_trans)
 
-    s = '\n'.join(filter(lambda x: x != '', map(lambda x: x.strip(), s.split('\n'))))
+    s = '\n'.join(filter(lambda x: x != '', [ x.strip() for x in s.split('\n') ]))
     s = ' '.join(filter(lambda x: x != '', s.split(' ')))
     return s
 
@@ -158,7 +180,7 @@ def normalize_obj(o):
     for attr in dir(o):
         if attr[0] != '_':
             value = getattr(o, attr)
-            if type(value) in types.StringTypes:
+            if type(value) in (type(''), type(byteliteral('').decode('ascii'))):
                 setattr(o, attr, normalize_text(value))
 
     return o
@@ -188,18 +210,18 @@ def parse_dateTime(s):
 
     mo = re_dateTime.match(s)
     if mo != None:
-        year, month, day, hour, min, sec = map(lambda x: string.atoi(x), mo.group('year', 'month', 'day', 'hour', 'min', 'sec'))
+        year, month, day, hour, min, sec = [ int(x) for x in mo.group('year', 'month', 'day', 'hour', 'min', 'sec')]
 
         tzsign, tzhour, tzmin = mo.group('tzsign', 'tzhour', 'tzmin')
         if tzhour != None and tzmin != None:
-            tzoff = 60*(60*string.atoi(tzhour) + string.atoi(tzmin))
+            tzoff = 60*(60*int(tzhour) + int(tzmin))
         else:
             tzoff = 0
 
         if tzsign == '-':
             tzoff = -tzoff
 
-        tstamp = int(rfc822.mktime_tz((year, month, day, hour, min, sec, 0, 0, 0, tzoff)))
+        tstamp = int(mktime_tz((year, month, day, hour, min, sec, 0, 0, 0, tzoff)))
     else:
         tstamp = None
 
@@ -210,7 +232,7 @@ def parse_Rfc822DateTime(s):
         return None
 
     try:
-        tstamp = int(rfc822.mktime_tz(rfc822.parsedate_tz(s)))
+        tstamp = int(mktime_tz(parsedate_tz(s)))
     except:
         tstamp = None
 
@@ -225,11 +247,8 @@ def compare_items(l, r):
         if (lguid != None) and (rguid != None):
             return lguid == rguid
 
-        lurl = urlparse.urlsplit(llink)
-        rurl = urlparse.urlsplit(rlink)
-
-        lprotocol, lhost, lpath = lmo.group('protocol', 'host', 'path')
-        rprotocol, rhost, rpath = rmo.group('protocol', 'host', 'path')
+        lurl = urlsplit(llink)
+        rurl = urlsplit(rlink)
 
         if lurl.scheme == rurl.scheme and lurl.path == rurl.path and \
                 lurl.query == rurl.query and lurl.fragment == rurl.fragment:
@@ -373,16 +392,16 @@ class Null_Decompressor:
         return s
 
     def flush(self):
-        return ''
+        return byteliteral('')
 
 
 class Deflate_Decompressor:
     def __init__(self):
-        self._adler32 = zlib.adler32('')
+        self._adler32 = zlib.adler32(byteliteral(''))
         self._raw_deflate = False
 
         self._decompress = zlib.decompressobj()
-        self._buffer = ''
+        self._buffer = byteliteral('')
 
         self._state_feed = Deflate_Decompressor._feed_header
 
@@ -392,7 +411,7 @@ class Deflate_Decompressor:
 
     def feed(self, s):
         self._buffer = self._buffer + s
-        data = ''
+        data = byteliteral('')
 
         while self._state_feed and len(self._buffer):
             res = self._state_feed(self)
@@ -407,7 +426,7 @@ class Deflate_Decompressor:
         return data
 
     def flush(self):
-        data = ''
+        data = byteliteral('')
 
         while self._state_feed:
             res = self._state_feed(self)
@@ -415,7 +434,7 @@ class Deflate_Decompressor:
             if res:
                 self._update_adler32(res)
                 data += res
-            elif res == '' and self._state_feed != None:
+            elif res == byteliteral('') and self._state_feed != None:
                 raise IOError('premature EOF')
 
         if len(self._buffer):
@@ -430,13 +449,13 @@ class Deflate_Decompressor:
             header_int = struct.unpack('>H', header)[0]
             if header_int % 31 != 0:
                 self._raw_deflate = True
-                self._buffer = '\x78\x9c' + self._buffer
+                self._buffer = byteliteral('\x78\x9c') + self._buffer
 
             self._state_feed = Deflate_Decompressor._feed_data
             return None
 
         # need more data
-        return ''
+        return byteliteral('')
 
     def _feed_data(self):
         if len(self._buffer) > 0:
@@ -459,19 +478,19 @@ class Deflate_Decompressor:
 
     def _feed_eof(self):
         self._state_feed = None
-        return ''
+        return byteliteral('')
 
 
 class Gzip_Decompressor:
     FTEXT, FHCRC, FEXTRA, FNAME, FCOMMENT = 1, 2, 4, 8, 16
 
     def __init__(self):
-        self._crc = zlib.crc32('')
+        self._crc = zlib.crc32(byteliteral(''))
         self._size = 0
 
         self._decompress = zlib.decompressobj(-zlib.MAX_WBITS)
         self._header_flag = 0
-        self._buffer = ''
+        self._buffer = byteliteral('')
 
         self._state_feed = Gzip_Decompressor._feed_header_static
 
@@ -481,7 +500,7 @@ class Gzip_Decompressor:
 
     def feed(self, s):
         self._buffer = self._buffer + s
-        data = ''
+        data = byteliteral('')
 
         while self._state_feed and len(self._buffer):
             res = self._state_feed(self)
@@ -496,7 +515,7 @@ class Gzip_Decompressor:
         return data
 
     def flush(self):
-        data = ''
+        data = byteliteral('')
 
         while self._state_feed:
             res = self._state_feed(self)
@@ -504,7 +523,7 @@ class Gzip_Decompressor:
             if res:
                 self._update_crc32(res)
                 data += res
-            elif res == '' and self._state_feed != None:
+            elif res == byteliteral('') and self._state_feed != None:
                 raise IOError('premature EOF')
 
         if len(self._buffer):
@@ -515,12 +534,12 @@ class Gzip_Decompressor:
     def _feed_header_static(self):
         if len(self._buffer) >= 10:
             magic = self._buffer[:2]
-            if magic != '\037\213':
+            if magic != byteliteral('\037\213'):
                 raise IOError('Not a gzipped file')
-            method = ord(self._buffer[2])
+            method = ord(self._buffer[2:3])
             if method != 8:
                 raise IOError('Unknown compression method')
-            self._header_flag = ord(self._buffer[3])
+            self._header_flag = ord(self._buffer[3:4])
             # modtime = self.fileobj.read(4)
             # extraflag = self.fileobj.read(1)
             # os = self.fileobj.read(1)
@@ -530,7 +549,7 @@ class Gzip_Decompressor:
             return None
 
         # need more data
-        return ''
+        return byteliteral('')
 
     def _feed_header_flags(self):
         if self._header_flag & Gzip_Decompressor.FEXTRA:
@@ -543,14 +562,14 @@ class Gzip_Decompressor:
                     return None
         elif self._header_flag & Gzip_Decompressor.FNAME:
             # Read and discard a null-terminated string containing the filename
-            pos = string.find(self._buffer, '\0')
+            pos = self._buffer.find(byteliteral('\0'))
             if pos != -1:
                 self._buffer = self._buffer[pos + 1:]
                 self._header_flag = self._header_flag & ~Gzip_Decompressor.FNAME
                 return None
         elif self._header_flag & Gzip_Decompressor.FCOMMENT:
             # Read and discard a null-terminated string containing a comment
-            pos = string.find(self._buffer, '\0')
+            pos = self._buffer.find(byteliteral('\0'))
             if pos != -1:
                 self._buffer = self._buffer[pos + 1:]
                 self._header_flag = self._header_flag & ~Gzip_Decompressor.FCOMMENT
@@ -565,7 +584,7 @@ class Gzip_Decompressor:
             return None
 
         # need more data
-        return ''
+        return byteliteral('')
 
     def _feed_data(self):
         if len(self._buffer) > 0:
@@ -588,7 +607,7 @@ class Gzip_Decompressor:
 
     def _feed_eof(self):
         if len(self._buffer) >= 8:
-            crc32, isize = struct.unpack("<ll", self._buffer[:8])
+            crc32, isize = struct.unpack('<ll', self._buffer[:8])
             if crc32 % 0x100000000 != self._crc % 0x100000000:
                 raise DecompressorError('CRC check failed')
             elif isize != self._size:
@@ -596,858 +615,521 @@ class Gzip_Decompressor:
 
             self._buffer = self._buffer[8:]
             self._state_feed = None
+        return byteliteral('')
+
+
+class FeedError(Exception):
+    def __init__(self, e):
+        Exception.__init__(self, e)
+
+
+def findtag(parent, tags):
+    elem = None
+
+    for tag in tags:
+        elem = parent.find(tag)
+        if elem != None:
+            break
+
+    return elem
+
+def findattr(l, textattr, attr=None, values=(), default=''):
+    text, typ = '', None
+    for e in l:
+        thistyp = -1
+        if attr != None:
+            try:
+                thistyp = values.index(e.get(attr, default))
+            except ValueError:
+                pass
+
+        if text == '' or thistyp > typ:
+            if e.get(textattr, None):
+                text, typ = e.get(textattr, None), thistyp
+
+    return text
+
+def findelem(l, attr=None, values=(), default=''):
+    elem, typ = None, None
+    for e in l:
+        thistyp = -1
+        if attr != None:
+            try:
+                thistyp = values.index(e.get(attr, default))
+            except ValueError:
+                pass
+
+        if elem == None or thistyp > typ:
+            elem, typ = e, thistyp
+
+    return elem
+
+
+def xml2plain(elem, buf):
+    if elem.text:
+        buf.write(elem.text)
+
+    for item in elem:
+        xml2plain(item, buf)
+
+    if elem.tail:
+        buf.write(elem.tail)
+
+def html2plain(elem):
+    class HTML2Plain(HTMLParser):
+        def __init__(self):
+            HTMLParser.__init__(self)
+            self.__buf = StringIO()
+            self.__processed, self.__errors = 0, 0
+
+        def close(self):
+            HTMLParser.close(self)
+            text = self.__buf.getvalue()
+            self.__buf.close()
+
+            if self.__errors == 0 or self.__processed > 3*self.__errors:
+                return text
+            else:
+                return None
+
+        def handle_data(self, data):
+            self.__buf.write(data)
+
+        def handle_charref(self, name):
+            try:
+                self.__buf.write(unichr(int(name)))
+            except ValueError:
+                self.__errors += 1
+
+        def handle_entityref(self, name):
+            try:
+                self.__buf.write(unichr(name2codepoint[name]))
+            except KeyError:
+                self.__errors += 1
+
+        def handle_starttag(self, tag, attrs):
+            self.__processed += 1
+
+        def handle_endtag(self, tag):
+            self.__processed += 1
+
+        def handle_comment(self, data):
+            self.__processed += 1
+
+        def unknown_decl(self, data):
+            self.__errors += 1
+
+    html, text = '', None
+    if elem != None:
+        try:
+            parser = HTML2Plain()
+            buf = StringIO()
+            xml2plain(elem, buf)
+            html = buf.getvalue()
+            buf.close()
+            parser.feed(html)
+            text = parser.close()
+        except:
+            pass
+
+    if text == None:
+        return html
+    else:
+        return text
+
+def typedtext(elem):
+    if elem == None:
         return ''
+    if elem.get('type', None) == 'html':
+        return html2plain(elem)
+    else:
+        buf = StringIO()
+        xml2plain(elem, buf)
+        text = buf.getvalue()
+        buf.close()
+        return text
 
 
-ENTITIES = {
-    'nbsp' : '\xa0',
-    'iexcl' : '\xa1',
-    'cent' : '\xa2',
-    'pound' : '\xa3',
-    'curren' : '\xa4',
-    'yen' : '\xa5',
-    'brvbar' : '\xa6',
-    'sect' : '\xa7',
-    'uml' : '\xa8',
-    'copy' : '\xa9',
-    'ordf' : '\xaa',
-    'laquo' : '\xab',
-    'not' : '\xac',
-    'shy' : '\xad',
-    'reg' : '\xae',
-    'macr' : '\xaf',
-    'deg' : '\xb0',
-    'plusmn' : '\xb1',
-    'sup2' : '\xb2',
-    'sup3' : '\xb3',
-    'acute' : '\xb4',
-    'micro' : '\xb5',
-    'para' : '\xb6',
-    'middot' : '\xb7',
-    'cedil' : '\xb8',
-    'sup1' : '\xb9',
-    'ordm' : '\xba',
-    'raquo' : '\xbb',
-    'frac14' : '\xbc',
-    'frac12' : '\xbd',
-    'frac34' : '\xbe',
-    'iquest' : '\xbf',
-    'Agrave' : '\xc0',
-    'Aacute' : '\xc1',
-    'Acirc' : '\xc2',
-    'Atilde' : '\xc3',
-    'Auml' : '\xc4',
-    'Aring' : '\xc5',
-    'AElig' : '\xc6',
-    'Ccedil' : '\xc7',
-    'Egrqave' : '\xc8',
-    'Eacute' : '\xc9',
-    'Ecirc' : '\xca',
-    'Euml' : '\xcb',
-    'Igrave' : '\xcc',
-    'Iacute' : '\xcd',
-    'Icirc' : '\xce',
-    'Iuml' : '\xcf',
-    'ETH' : '\xd0',
-    'Ntilde' : '\xd1',
-    'Ograve' : '\xd2',
-    'Oacute' : '\xd3',
-    'Ocirc' : '\xd4',
-    'Otilde' : '\xd5',
-    'Ouml' : '\xd6',
-    'times' : '\xd7',
-    'Oslash' : '\xd8',
-    'Ugrave' : '\xd9',
-    'Uacute' : '\xda',
-    'Ucirc' : '\xdb',
-    'Uuml' : '\xdc',
-    'Yacute' : '\xdd',
-    'THORN' : '\xde',
-    'szlig' : '\xdf',
-    'agrave' : '\xe0',
-    'aacute' : '\xe1',
-    'acirc' : '\xe2',
-    'atilde' : '\xe3',
-    'auml' : '\xe4',
-    'aring' : '\xe5',
-    'aelig' : '\xe6',
-    'ccedil' : '\xe7',
-    'egrave' : '\xe8',
-    'eacute' : '\xe9',
-    'ecirc' : '\xea',
-    'euml' : '\xeb',
-    'igrave' : '\xec',
-    'iacute' : '\xed',
-    'icirc' : '\xee',
-    'iuml' : '\xef',
-    'eth' : '\xf0',
-    'ntilde' : '\xf1',
-    'ograve' : '\xf2',
-    'oacute' : '\xf3',
-    'ocirc' : '\xf4',
-    'otilde' : '\xf5',
-    'ouml' : '\xf6',
-    'divide' : '\xf7',
-    'oslash' : '\xf8',
-    'ugrave' : '\xf9',
-    'uacute' : '\xfa',
-    'ucirc' : '\xfb',
-    'uuml' : '\xfc',
-    'yacute' : '\xfd',
-    'thorn' : '\xfe',
-    'yuml' : '\xff',
-    }
+class Feed_Parser:
+    class Handler:
+        def __init__(self):
+            self.__data, self.__elem, self.__last, self.__tail = [], [], None, None
+
+            self.__toplevel_handler = {
+                '{http://www.w3.org/2005/Atom}feed' :
+                    (self.atom10_feed_start, self.atom10_feed_end),
+                '{http://purl.org/atom/ns#}feed' :
+                    (self.atom03_feed_start, self.atom03_feed_end),
+
+                '{http://www.w3.org/1999/02/22-rdf-syntax-ns#}RDF' :
+                    (self.rss_start, self.rss_end),
+                'rss' :
+                    (self.rss_start, self.rss_end),
+                '{http://backend.userland.com/rss2}rss' :
+                    (self.rss_start, self.rss_end),
+
+                # RSS 1.1, see http://inamidst.com/rss1.1/
+                '{http://purl.org/net/rss1.1#}Channel' :
+                    (self.rss11_start, self.rss11_end),
+                }
+            self.__end_handler, self.__element_handler = None, {}
+
+            self.info = None
+            self.elements = []
+
+        def close(self):
+            assert len(self.__elem) == 0, "missing end tags"
+            assert self.__last != None, "missing toplevel element"
+            return self.__last
+
+        def __flush(self):
+            if self.__data:
+                if self.__last is not None:
+                    text = ''.join(self.__data)
+                    if self.__tail:
+                        assert self.__last.tail is None, "internal error (tail)"
+                        self.__last.tail = text
+                    else:
+                        assert self.__last.text is None, "internal error (text)"
+                        self.__last.text = text
+                self.__data = []
+
+        def data(self, data):
+            self.__data.append(data)
+
+        def start(self, tag, attrs):
+            if attrs == None:
+                attrs = {}
+            self.__flush()
+            self.__last = elem = Element(tag, attrs)
+
+            if len(self.__elem) == 0:
+                try:
+                    handler, self.__end_handler = self.__toplevel_handler[tag]
+                except KeyError:
+                    handler = None
+
+                if handler:
+                    handler(elem)
+                else:
+                    raise FeedError('Unknown start tag %s' % (tag,))
+
+            self.__elem.append(elem)
+            self.__tail = False
+            return elem
+
+        def end(self, tag):
+            self.__flush()
+            self.__last = self.__elem.pop()
+            assert self.__last.tag == tag,\
+                   "end tag mismatch (expected %s, got %s)" % (
+                       self.__last.tag, tag)
+            self.__tail = True
+
+            if len(self.__elem) == 0:
+                self.__end_handler(self.__last)
+            else:
+                try:
+                    handler = self.__element_handler[tag]
+                except KeyError:
+                    handler, keep = None, len(self.__elem) >= 2
+
+                if handler:
+                    keep = handler(self.__last)
+                if keep:
+                    self.__elem[-1].append(self.__last)
+
+            self._root = self.__last
+            return self.__last
 
 
-class Feed_Parser(xmllib.XMLParser):
-    def __init__(self, base_url, charset=None, default_charset=None):
-        xmllib.XMLParser.__init__(self, accept_utf8=1)
+        def keep_elem(self, elem):
+            return True
 
-        self.elements = {
-            'http://www.w3.org/1999/02/22-rdf-syntax-ns# RDF' :
-            (self.rss_rdf_start, self.rss_rdf_end),
-            'rss' :
-            (self.rss_rss_start, self.rss_rss_end),
-            'http://backend.userland.com/rss2 rss' :
-            (self.rss_rss_start, self.rss_rss_end),
-            # RSS 0.90, see http://www.purplepages.ie/RSS/netscape/rss0.90.html
-            # RSS 0.91, see http://my.netscape.com/publish/formats/rss-spec-0.91.html
-            'http://my.netscape.com/rdf/simple/0.9/ rss' :
-            (self.rss_rss_start, self.rss_rss_end),
-            # non-standard, but allow anyway
-            'http://my.netscape.com/rdf/simple/0.91/ rss' :
-            (self.rss_rss_start, self.rss_rss_end),
-            # RSS 1.0, see http://web.resource.org/rss/1.0/spec
-            'http://purl.org/rss/1.0/ rss' :
-            (self.rss_rss_start, self.rss_rss_end),
-            'http://purl.org/rss/2.0/ rss' :
-            (self.rss_rss_start, self.rss_rss_end),
-            # Atom 0.3
-            'http://purl.org/atom/ns# feed' :
-            (self.atom03_feed_start, self.atom03_feed_end),
-            # Atom 1.0
-            'http://www.w3.org/2005/Atom feed' :
-            (self.atom10_feed_start, self.atom10_feed_end),
 
-            # RSS 1.1, see http://inamidst.com/rss1.1/
-            'http://purl.org/net/rss1.1# Channel' :
-            (self.rss_rss11_start, self.rss_rss11_end)
-            }
+        def atom03_feed_start(self, elem):
+            self.__element_handler = {
+                '{http://purl.org/atom/ns#}entry' :
+                    self.atom03_entry,
+                '{http://purl.org/atom/ns#}title' :
+                    self.keep_elem,
+                '{http://purl.org/atom/ns#}link' :
+                    self.keep_elem,
+                '{http://purl.org/atom/ns#}tagline' :
+                    self.keep_elem,
+                '{http://purl.org/atom/ns#}id' :
+                    self.keep_elem,
+                '{http://purl.org/atom/ns#}created' :
+                    self.keep_elem,
+                '{http://purl.org/atom/ns#}modified' :
+                    self.keep_elem,
+                }
 
-        self._base_url = base_url
-        self._charset = charset
-        self._default_charset = default_charset
+        def atom03_feed_end(self, elem):
+            ns = '{http://purl.org/atom/ns#}'
 
-        self._format = ''
-        self._encoding = 'utf-8'
-        self._feed_encoding = None
-        self._bytes = 0
+            title = typedtext(elem.find(ns + 'title'))
+            descr = typedtext(elem.find(ns + 'tagline'))
+            link = findattr(elem.findall(ns + 'link'),
+                            'href', 'rel',
+                            ['via', 'related', 'alternate', 'enclosure'],
+                            'alternate')
+            guid = elem.findtext(ns + 'id')
+            published = parse_dateTime(elem.findtext(ns + 'created') or \
+                                           elem.findtext(ns + 'modified') or \
+                                           None)
 
-        self._state = 0
-        self._content_mode = None
-        self._summary = None
+            self.info = Data(title=title, descr=descr, link=link,
+                             guid=guid, published=published)
 
-        self._channel = Data(title='', link='', descr='')
-        self._items = []
 
-        self._reset_cdata()
-        self._set_encoding(None)
+        def atom03_entry(self, elem):
+            ns = '{http://purl.org/atom/ns#}'
 
-    def _set_encoding(self, encoding):
-        if not self._feed_encoding:
-            if self._charset:
-                encoding = self._charset
-            elif not encoding:
-                if self._default_charset:
-                    encoding = self._default_charset
+            title = typedtext(elem.find(ns + 'title'))
+            descr = typedtext(findelem(elem.findall(ns + 'summary') +
+                                       elem.findall(ns + 'content'),
+                                       'type', ['html', 'xhtml', 'text'],
+                                       'text'))
+            link = findattr(elem.findall(ns + 'link'),
+                            'href', 'rel',
+                            ['via', 'related', 'alternate', 'enclosure'],
+                            'alternate')
+            guid = elem.findtext(ns + 'id')
+            published = parse_dateTime(elem.findtext(ns + 'created') or \
+                                           elem.findtext(ns + 'modified') or \
+                                           None)
 
-            if encoding:
-                encoding = encoding.lower()
-                if encoding[:8] == 'windows-':
-                    encoding = 'cp' + encoding[8:]
+            self.elements.append(Data(title=title, descr=descr, link=link,
+                                      guid=guid, published=published))
+            return False
 
-                self._encoding = encoding
+        def atom10_feed_start(self, elem):
+            self.__element_handler = {
+                '{http://www.w3.org/2005/Atom}entry' :
+                    self.atom10_entry,
+                '{http://www.w3.org/2005/Atom}title' :
+                    self.keep_elem,
+                '{http://www.w3.org/2005/Atom}link' :
+                    self.keep_elem,
+                '{http://www.w3.org/2005/Atom}subtitle' :
+                    self.keep_elem,
+                '{http://www.w3.org/2005/Atom}id' :
+                    self.keep_elem,
+                '{http://www.w3.org/2005/Atom}updated' :
+                    self.keep_elem,
+                }
 
-    def _get_atom_attr(self, attrs, name):
-        for ns in ['', 'http://purl.org/atom/ns# ',
-                   'http://www.w3.org/2005/Atom ']:
-            if attrs.has_key(ns + name):
-                return attrs[ns + name]
+        def atom10_feed_end(self, elem):
+            ns = '{http://www.w3.org/2005/Atom}'
 
+            title = typedtext(elem.find(ns + 'title'))
+            descr = typedtext(elem.find(ns + 'subtitle'))
+            link = findattr(elem.findall(ns + 'link'),
+                            'href', 'rel',
+                            ['via', 'related', 'alternate', 'enclosure'],
+                            'alternate')
+            guid = elem.findtext(ns + 'id')
+            published = parse_dateTime(elem.findtext(ns + 'published') or \
+                                           elem.findtext(ns + 'updated') or \
+                                           None)
+
+            self.info = Data(title=title, descr=descr, link=link,
+                             guid=guid, published=published)
+
+
+        def atom10_entry(self, elem):
+            ns = '{http://www.w3.org/2005/Atom}'
+
+            title = typedtext(elem.find(ns + 'title'))
+            descr = typedtext(findelem(elem.findall(ns + 'summary') +
+                                       elem.findall(ns + 'content'),
+                                       'type', ['html', 'xhtml', 'text'],
+                                       'text'))
+            link = findattr(elem.findall(ns + 'link'),
+                            'href', 'rel',
+                            ['via', 'related', 'alternate', 'enclosure'],
+                            'alternate')
+            guid = elem.findtext(ns + 'id')
+            published = parse_dateTime(elem.findtext(ns + 'published') or \
+                                           elem.findtext(ns + 'updated') or \
+                                           None)
+
+            self.elements.append(Data(title=title, descr=descr, link=link,
+                                      guid=guid, published=published))
+            return False
+
+
+        def rss_start(self, elem):
+            self.__element_handler = {
+                'channel' :
+                    self.keep_elem,
+                '{http://purl.org/rss/1.0/}channel' :
+                    self.keep_elem,
+                '{http://purl.org/rss/2.0/}channel' :
+                    self.keep_elem,
+                '{http://backend.userland.com/rss2}channel' :
+                    self.keep_elem,
+                '{http://my.netscape.com/publish/formats/rss-0.91.dtd}channel' :
+                    self.keep_elem,
+                '{http://my.netscape.com/rdf/simple/0.9/}channel' :
+                    self.keep_elem,
+
+                'item' :
+                    self.rss_entry,
+                '{http://purl.org/rss/1.0/}item' :
+                    self.rss_entry,
+                '{http://purl.org/rss/2.0/}item' :
+                    self.rss_entry,
+                '{http://backend.userland.com/rss2}item' :
+                    self.rss_entry,
+                '{http://my.netscape.com/publish/formats/rss-0.91.dtd}item' :
+                    self.rss_entry,
+                '{http://my.netscape.com/rdf/simple/0.9/}item' :
+                    self.rss_entry,
+                }
+
+        def rss_end(self, elem):
+            channel = findtag(elem,
+                              ('channel',
+                               '{http://backend.userland.com/rss2}channel',
+                               '{http://purl.org/rss/1.0/}channel',
+                               '{http://purl.org/rss/2.0/}channel',
+                               '{http://my.netscape.com/publish/formats/rss-0.91.dtd}}channel',
+                               '{http://my.netscape.com/rdf/simple/0.9/}channel'))
+
+            if channel != None:
+                if channel.tag[0] == '{':
+                    ns = channel.tag.split('}')[0] + '}'
+                else:
+                    ns = ''
+
+                title = html2plain(channel.find(ns + 'title'))
+                descr = html2plain(channel.find(ns + 'description'))
+                link = channel.findtext(ns + 'link')
+                guid = channel.get('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about', None)
+                published = parse_dateTime(channel.findtext('{http://purl.org/dc/elements/1.1/}date')) or \
+                    parse_Rfc822DateTime(channel.findtext(ns + 'lastBuildDate')) or \
+                    None
+
+                self.info = Data(title=title, descr=descr, link=link,
+                                 guid=guid, published=published)
+
+        def rss_entry(self, elem):
+            if elem.tag[0] == '{':
+                ns = elem.tag.split('}')[0] + '}'
+            else:
+                ns = ''
+
+            title = html2plain(elem.find(ns + 'title'))
+            descr = html2plain(elem.find(ns + 'description'))
+            link = elem.findtext('{http://www.pheedo.com/namespace/pheedo}origLink') or \
+                elem.findtext('{http://rssnamespace.org/feedburner/ext/1.0}origLink') or \
+                elem.findtext(ns + 'link')
+            if not link:
+                enclosure = elem.find(ns + 'enclosure')
+                if enclosure != None:
+                    link = enclosure.get('url', '')
+                elif link == None:
+                    link = ''
+
+            guid = elem.get('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about', None) or \
+                elem.findtext(ns + 'guid')
+
+            published = parse_dateTime(elem.findtext('{http://purl.org/dc/elements/1.1/}date')) or \
+                parse_Rfc822DateTime(elem.findtext(ns + 'pubDate')) or \
+                None
+
+            self.elements.append(Data(title=title, descr=descr, link=link,
+                                      guid=guid, published=published))
+            return False
+
+
+        def rss11_start(self, elem):
+            self.__element_handler = {
+                '{http://purl.org/net/rss1.1#}title' :
+                    self.keep_elem,
+                '{http://purl.org/net/rss1.1#}link' :
+                    self.keep_elem,
+                '{http://purl.org/net/rss1.1#}description' :
+                    self.keep_elem,
+
+                '{http://purl.org/net/rss1.1#}item' :
+                    self.rss11_entry,
+                }
+
+        def rss11_end(self, elem):
+            ns = '{http://purl.org/net/rss1.1#}'
+
+            title = elem.findtext(ns + 'title') or ''
+            descr = elem.findtext(ns + 'description') or ''
+            link = elem.findtext(ns + 'link') or ''
+            guid = None
+            published = None
+
+            self.info = Data(title=title, descr=descr, link=link,
+                             guid=guid, published=published)
+
+        def rss11_entry(self, elem):
+            ns = '{http://purl.org/net/rss1.1#}'
+
+            title = elem.findtext(ns + 'title') or ''
+            descr = elem.findtext(ns + 'description') or ''
+            link = elem.findtext(ns + 'link') or ''
+            guid = elem.get('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about', None)
+            published = None
+
+            self.elements.append(Data(title=title, descr=descr, link=link,
+                                      guid=guid, published=published))
+            return False
+
+
+    def __init__(self, base_url):
+        self.__base_url = base_url
+        self.__handler = Feed_Parser.Handler()
+        if hasattr(XMLParser, 'feed_error_log'):
+            self.__parser = XMLParser(target=self.__handler, recover=True)
+        else:
+            self.__parser = XMLParser(target=self.__handler)
+
+
+    def get_error_log(self):
+        if hasattr(self.__parser, 'feed_error_log'):
+            return self.__parser.feed_error_log
         return None
 
-    def handle_xml(self, encoding, standalone):
-        self._set_encoding(encoding)
+    def get_info(self):
+        return self.__handler.info
 
-    def resolve_url(self, url):
+    def get_items(self):
+        return self.__handler.elements
+
+
+    def __resolve_link(self, url):
         if url.startswith('/'):
-            return '%s://%s%s' % (self._base_url[0], self._base_url[1],
+            return '%s://%s%s' % (self.__base_url[0], self.__base_url[1],
                                   url.encode('ascii'))
         else:
             return url.encode('ascii')
 
 
     def feed(self, data):
-        if self._bytes == 0:
-            if data[:4] == codecs.BOM64_LE:
-                # probably not supported
-                self._feed_encoding = 'utf-32-le'
-                self._encoding = 'utf-8'
-                data = data[4:]
-            elif data[:4] == codecs.BOM64_BE:
-                # probably not supported
-                self._feed_encoding = 'utf-32-be'
-                self._encoding = 'utf-8'
-                data = data[4:]
-            elif data[:3] == '\xef\xbb\xbf':
-                self._feed_encoding = None
-                self._encoding = 'utf-8'
-                data = data[3:]
-            elif data[:2] == codecs.BOM32_LE:
-                self._feed_encoding = 'utf-16-le'
-                self._encoding = 'utf-8'
-                data = data[2:]
-            elif data[:2] == codecs.BOM32_BE:
-                self._feed_encoding = 'utf-16-be'
-                self._encoding = 'utf-8'
-                data = data[2:]
+        return self.__parser.feed(data)
 
-        self._bytes = self._bytes + len(data)
-        if self._feed_encoding:
-            data = data.decode(self._feed_encoding).encode('utf-8')
+    def close(self):
+        self.__parser.close()
+        elem = self.__handler.close()
 
-        return xmllib.XMLParser.feed(self, data)
+        info = self.__handler.info
+        if info != None:
+            info.link = self.__resolve_link(info.link)
 
+        for item in self.__handler.elements:
+            item.link = self.__resolve_link(item.link)
 
-    def rss_rdf_start(self, attrs):
-        self._format = 'rdf'
-        self.elements.update({
-            'http://my.netscape.com/rdf/simple/0.9/ channel' :
-            (self.rss_channel_start, self.rss_channel_end),
-            'http://purl.org/rss/1.0/ channel' :
-            (self.rss_channel_start, self.rss_channel_end),
-            'http://purl.org/rss/2.0/ channel' :
-            (self.rss_channel_start, self.rss_channel_end),
+        return elem
 
-            'http://my.netscape.com/rdf/simple/0.9/ item' :
-            (self.rss_item_start, self.rss_item_end),
-            'http://purl.org/rss/1.0/ item' :
-            (self.rss_item_start, self.rss_item_end),
-            'http://purl.org/rss/2.0/ item' :
-            (self.rss_item_start, self.rss_item_end),
-            # not strictly conforming...
-            'item' :
-            (self.rss_item_start, self.rss_item_end),
 
-            'http://my.netscape.com/rdf/simple/0.9/ title' :
-            (self.rss_title_start, self.rss_title_end),
-            'http://purl.org/dc/elements/1.1/ title' :
-            (self.rss_title_start, self.rss_title_end),
-            'http://purl.org/rss/1.0/ title' :
-            (self.rss_title_start, self.rss_title_end),
-            'http://purl.org/rss/2.0/ title' :
-            (self.rss_title_start, self.rss_title_end),
-            # not strictly conforming...
-            'title' :
-            (self.rss_title_start, self.rss_title_end),
-
-            'http://my.netscape.com/rdf/simple/0.9/ link' :
-            (self.rss_link_start, self.rss_link_end),
-            'http://purl.org/rss/1.0/ link' :
-            (self.rss_link_start, self.rss_link_end),
-            'http://purl.org/rss/2.0/ link' :
-            (self.rss_link_start, self.rss_link_end),
-            # not strictly conforming...
-            'link' :
-            (self.rss_link_start, self.rss_link_end),
-
-            'http://my.netscape.com/rdf/simple/0.9/ description' :
-            (self.rss_description_start, self.rss_description_end),
-            'http://purl.org/dc/elements/1.1/ description' :
-            (self.rss_description_start, self.rss_description_end),
-            'http://purl.org/rss/1.0/ description' :
-            (self.rss_description_start, self.rss_description_end),
-            'http://purl.org/rss/2.0/ description' :
-            (self.rss_description_start, self.rss_description_end),
-            # not strictly conforming...
-            'description' :
-            (self.rss_description_start, self.rss_description_end),
-
-            'http://purl.org/dc/elements/1.1/ date' :
-            (self.rss_date_start, self.rss_date_end)
-            })
-
-    def rss_rdf_end(self):
-        self.elements = {}
-
-
-    def rss_rss_start(self, attrs):
-        self._format = 'rss'
-        self.elements.update({
-            'channel' :
-            (self.rss_channel_start, self.rss_channel_end),
-            'http://backend.userland.com/rss2 channel' :
-            (self.rss_channel_start, self.rss_channel_end),
-            'http://my.netscape.com/publish/formats/rss-0.91.dtd channel' :
-            (self.rss_channel_start, self.rss_channel_end),
-            'http://purl.org/rss/1.0/ channel' :
-            (self.rss_channel_start, self.rss_channel_end),
-            'http://purl.org/rss/2.0/ channel' :
-            (self.rss_channel_start, self.rss_channel_end),
-
-            'item' :
-            (self.rss_item_start, self.rss_item_end),
-            'http://backend.userland.com/rss2 item' :
-            (self.rss_item_start, self.rss_item_end),
-            'http://my.netscape.com/publish/formats/rss-0.91.dtd item' :
-            (self.rss_item_start, self.rss_item_end),
-            'http://purl.org/rss/1.0/ item' :
-            (self.rss_item_start, self.rss_item_end),
-            'http://purl.org/rss/2.0/ item' :
-            (self.rss_item_start, self.rss_item_end),
-
-            'title' :
-            (self.rss_title_start, self.rss_title_end),
-            'http://backend.userland.com/rss2 title' :
-            (self.rss_title_start, self.rss_title_end),
-            'http://my.netscape.com/publish/formats/rss-0.91.dtd title' :
-            (self.rss_title_start, self.rss_title_end),
-            'http://purl.org/dc/elements/1.1/ title' :
-            (self.rss_title_start, self.rss_title_end),
-            'http://purl.org/rss/1.0/ title' :
-            (self.rss_title_start, self.rss_title_end),
-            'http://purl.org/rss/2.0/ title' :
-            (self.rss_title_start, self.rss_title_end),
-
-            'link' :
-            (self.rss_link_start, self.rss_link_end),
-            'http://backend.userland.com/rss2 link' :
-            (self.rss_link_start, self.rss_link_end),
-            'http://my.netscape.com/publish/formats/rss-0.91.dtd link' :
-            (self.rss_link_start, self.rss_link_end),
-            'http://purl.org/rss/1.0/ link' :
-            (self.rss_link_start, self.rss_link_end),
-            'http://purl.org/rss/2.0/ link' :
-            (self.rss_link_start, self.rss_link_end),
-
-            'http://www.pheedo.com/namespace/pheedo origLink' :
-            (self.rss_origlink_start, self.rss_origlink_end),
-
-            'http://rssnamespace.org/feedburner/ext/1.0 origLink' :
-            (self.rss_origlink_start, self.rss_origlink_end),
-
-            'description' :
-            (self.rss_description_start, self.rss_description_end),
-            'http://backend.userland.com/rss2 description' :
-            (self.rss_description_start, self.rss_description_end),
-            'http://my.netscape.com/publish/formats/rss-0.91.dtd description' :
-            (self.rss_description_start, self.rss_description_end),
-            'http://purl.org/dc/elements/1.1/ description' :
-            (self.rss_description_start, self.rss_description_end),
-            'http://purl.org/rss/1.0/ description' :
-            (self.rss_description_start, self.rss_description_end),
-            'http://purl.org/rss/2.0/ description' :
-            (self.rss_description_start, self.rss_description_end),
-
-            'enclosure' :
-            (self.rss_enclosure_start, self.rss_enclosure_end),
-
-            'guid' :
-            (self.rss_guid_start, self.rss_guid_end),
-
-            'pubDate' :
-            (self.rss_pubdate_start, self.rss_pubdate_end),
-            'http://purl.org/rss/2.0/ pubDate' :
-            (self.rss_pubdate_start, self.rss_pubdate_end),
-            'http://purl.org/dc/elements/1.1/ date' :
-            (self.rss_date_start, self.rss_date_end)
-            })
-
-    def rss_rss_end(self):
-        self.elements = {}
-
-
-    def rss_rss11_start(self, attrs):
-        self._format = 'rss11'
-        self.elements.update({
-            'http://purl.org/net/rss1.1# item' :
-            (self.rss_item_start, self.rss_item_end),
-
-            'http://purl.org/net/rss1.1# title' :
-            (self.rss_title_start, self.rss_title_end),
-
-            'http://purl.org/net/rss1.1# link' :
-            (self.rss_link_start, self.rss_link_end),
-
-            'http://purl.org/net/rss1.1# description' :
-            (self.rss_description_start, self.rss_description_end)
-            })
-        self._state = self._state | 0x04
-
-    def rss_rss11_end(self):
-        self._state = self._state & ~0x04
-        self.elements = {}
-
-
-    def atom03_feed_start(self, attrs):
-        self._format = 'atom03'
-        self.elements.update({
-            'http://purl.org/atom/ns# entry' :
-            (self.atom_entry_start, self.atom_entry_end),
-
-            'http://purl.org/atom/ns# title' :
-            (self.atom_title_start, self.atom_title_end),
-
-            'http://purl.org/atom/ns# link' :
-            (self.atom_link_start, self.atom_link_end),
-
-            'http://purl.org/atom/ns# tagline' :
-            (self.atom_subtitle_start, self.atom_subtitle_end),
-
-            'http://purl.org/atom/ns# summary' :
-            (self.atom_summary_start, self.atom_summary_end),
-
-            'http://purl.org/atom/ns# content' :
-            (self.atom_content_start, self.atom_content_end),
-
-            'http://purl.org/atom/ns# id' :
-            (self.atom_id_start, self.atom_id_end),
-
-            'http://purl.org/atom/ns# created' :
-            (self.atom_published_start, self.atom_published_end),
-            'http://purl.org/atom/ns# modified' :
-            (self.atom_updated_start, self.atom_updated_end)
-            })
-
-        self._state = self._state | 0x04
-
-    def atom03_feed_end(self):
-        self._state = self._state & ~0x04
-        self.elements = {}
-
-
-    def atom10_feed_start(self, attrs):
-        self._format = 'atom10'
-        self.elements.update({
-            'http://www.w3.org/2005/Atom entry' :
-            (self.atom_entry_start, self.atom_entry_end),
-
-            'http://www.w3.org/2005/Atom title' :
-            (self.atom_title_start, self.atom_title_end),
-
-            'http://www.w3.org/2005/Atom link' :
-            (self.atom_link_start, self.atom_link_end),
-
-            'http://www.w3.org/2005/Atom subtitle' :
-            (self.atom_subtitle_start, self.atom_subtitle_end),
-
-            'http://www.w3.org/2005/Atom summary' :
-            (self.atom_summary_start, self.atom_summary_end),
-
-            'http://www.w3.org/2005/Atom content' :
-            (self.atom_content_start, self.atom_content_end),
-
-            'http://www.w3.org/2005/Atom id' :
-            (self.atom_id_start, self.atom_id_end),
-
-            'http://www.w3.org/2005/Atom published' :
-            (self.atom_published_start, self.atom_published_end),
-            'http://www.w3.org/2005/Atom updated' :
-            (self.atom_updated_start, self.atom_updated_end)
-            })
-
-        self._state = self._state | 0x04
-
-    def atom10_feed_end(self):
-        self._state = self._state & ~0x04
-        self.elements = {}
-
-
-    def rss_channel_start(self, attrs):
-        self._state = self._state | 0x04
-
-    def rss_channel_end(self):
-        self._state = self._state & ~0x04
-
-
-    def rss_item_start(self, attrs):
-        if attrs.has_key('http://www.w3.org/1999/02/22-rdf-syntax-ns# about'):
-            guid = attrs['http://www.w3.org/1999/02/22-rdf-syntax-ns# about']
-        else:
-            guid = None
-
-        self._state = self._state | 0x08
-        self._items.append(Data(guid=guid, published=None, title='', link='', descr=''))
-
-    def rss_item_end(self):
-        elem = self._current_elem()
-        if (elem != None) and hasattr(elem, 'origlink'):
-            elem.link = elem.origlink
-            delattr(elem, 'origlink')
-
-        self._state = self._state & ~0x08
-
-
-    def rss_title_start(self, attrs):
-        if self._state & 0xfc:
-            self._reset_cdata('')
-
-    def rss_title_end(self):
-        if self._state & 0xfc:
-            elem = self._current_elem()
-            if elem != None:
-                elem.title = self.cdata()
-
-        self._reset_cdata()
-
-
-    def rss_link_start(self, attrs):
-        if self._state & 0xfc:
-            self._reset_cdata('')
-
-    def rss_link_end(self):
-        if self._state & 0xfc:
-            elem = self._current_elem()
-            if elem != None:
-                elem.link = self.resolve_url(self.cdata())
-
-        self._reset_cdata()
-
-
-    def rss_origlink_start(self, attrs):
-        if self._state & 0xfc:
-            self._reset_cdata('')
-
-    def rss_origlink_end(self):
-        if self._state & 0xfc:
-            elem = self._current_elem()
-            if elem != None:
-                elem.origlink = self.resolve_url(self.cdata())
-
-        self._reset_cdata()
-
-
-    def rss_description_start(self, attrs):
-        if self._state & 0xfc:
-            self._reset_cdata('')
-
-    def rss_description_end(self):
-        if self._state & 0xfc:
-            elem = self._current_elem()
-            if elem != None:
-                elem.descr = self.cdata()
-
-        self._reset_cdata()
-
-
-    def rss_guid_start(self, attrs):
-        if self._state & 0x8:
-            self._reset_cdata('')
-
-    def rss_guid_end(self):
-        if self._state & 0x8:
-            elem = self._current_elem()
-            if elem != None:
-                elem.guid = self.cdata()
-
-            self._reset_cdata()
-
-
-    def rss_enclosure_start(self, attrs):
-        if self._state & 0x8:
-            elem = self._current_elem()
-            if elem != None and elem.link == '':
-                if attrs.has_key('url'):
-                    elem.link = self.resolve_url(attrs['url'])
-
-            self._reset_cdata('')
-
-    def rss_enclosure_end(self):
-        if self._state & 0x8:
-            self._reset_cdata()
-
-
-    def rss_date_start(self, attrs):
-        if self._state & 0x8:
-            self._reset_cdata('')
-
-    def rss_date_end(self):
-        if self._state & 0x8:
-            elem = self._current_elem()
-            published = parse_dateTime(self.cdata())
-            if elem != None:
-                elem.published = published
-            self._reset_cdata()
-
-
-    def rss_pubdate_start(self, attrs):
-        if self._state & 0x8:
-            self._reset_cdata('')
-
-    def rss_pubdate_end(self):
-        if self._state & 0x8:
-            elem = self._current_elem()
-            published = parse_Rfc822DateTime(self.cdata())
-            if elem != None:
-                elem.published = published
-            self._reset_cdata()
-
-
-    def atom_entry_start(self, attrs):
-        self._state = (self._state & ~0x04) | 0x08
-        self._items.append(Data(guid=None, published=None, title='', link='', descr=''))
-
-    def atom_entry_end(self):
-        if self._items[-1].descr == '' and self._summary:
-            self._items[-1].descr = self._summary
-
-        self._state = (self._state & ~0x08) | 0x04
-
-
-    def atom_title_start(self, attrs):
-        if self._state & 0xfc:
-            self._reset_cdata('')
-
-    def atom_title_end(self):
-        if self._state & 0xfc:
-            elem = self._current_elem()
-            if elem != None:
-                elem.title = self.cdata()
-
-        self._reset_cdata()
-
-
-    def atom_link_start(self, attrs):
-        elem = self._current_elem()
-        if elem == None:
-            return
-
-        attr_type = self._get_atom_attr(attrs, 'type')
-
-        if elem.link:
-            if (attr_type != None) and (attr_type != 'text/html') and (attr_type != 'application/xhtml+xml') and (attr_type != 'xhtml') and (attr_type != 'html'):
-                return
-
-        attr_href = self._get_atom_attr(attrs, 'href')
-        if attr_href != None:
-            elem.link = self.resolve_url(attr_href)
-
-    def atom_link_end(self):
-        pass
-
-
-    def atom_subtitle_start(self, attrs):
-        if self._state & 0x04:
-            self._reset_cdata('')
-            if self._format == 'atom03':
-                attr_mode = self._get_atom_attr(attrs, 'mode')
-                if attr_mode != None:
-                    self._content_mode = attr_mode
-
-    def atom_subtitle_end(self):
-        if self._state & 0x04:
-            cdata = self.cdata()
-            if self._content_mode == 'base64':
-                cdata = cdata.decode('base64')
-            elem = self._current_elem()
-            if elem != None:
-                elem.descr = cdata
-
-        self._reset_cdata()
-        self._content_mode = None
-
-
-    def atom_content_start(self, attrs):
-        if self._state & 0x08:
-            self._reset_cdata('')
-            if self._format == 'atom03':
-                attr_mode = self._get_atom_attr(attrs, 'mode')
-                if attr_mode != None:
-                    self._content_mode = attr_mode
-
-    def atom_content_end(self):
-        if self._state & 0x08:
-            cdata = self.cdata()
-            if self._content_mode == 'base64':
-                cdata = cdata.decode('base64')
-            elem = self._current_elem()
-            if elem != None and elem != '':
-                elem.descr = cdata
-
-        self._reset_cdata()
-        self._content_mode = None
-
-
-    def atom_summary_start(self, attrs):
-        if self._state & 0x08:
-            self._reset_cdata('')
-            if self._format == 'atom03':
-                attr_mode = self._get_atom_attr(attrs, 'mode')
-                if attr_mode != None:
-                    self._content_mode = attr_mode
-
-    def atom_summary_end(self):
-        if self._state & 0x08:
-            cdata = self.cdata()
-            if self._content_mode == 'base64':
-                cdata = cdata.decode('base64')
-            self._summary = cdata
-
-        self._reset_cdata()
-        self._content_mode = None
-
-
-    def atom_id_start(self, attrs):
-        if self._state & 0x8:
-            self._reset_cdata('')
-
-    def atom_id_end(self):
-        if self._state & 0x8:
-            elem = self._current_elem()
-            if elem != None:
-                elem.guid = self.cdata()
-            self._reset_cdata()
-
-
-    def atom_published_start(self, attrs):
-        if self._state & 0x8:
-            self._reset_cdata('')
-
-    def atom_published_end(self):
-        if self._state & 0x8:
-            elem = self._current_elem()
-            published = parse_dateTime(self.cdata())
-            if elem != None:
-                elem.published = published
-            self._reset_cdata()
-
-    def atom_updated_start(self, attrs):
-        if self._state & 0x8:
-            self._reset_cdata('')
-
-    def atom_updated_end(self):
-        if self._state & 0x8:
-            elem = self._current_elem()
-            published = parse_dateTime(self.cdata())
-            if elem != None and elem.published == None:
-                elem.published = published
-            self._reset_cdata()
-
-
-
-    def unknown_starttag(self, tag, attrs):
-        if self._format == '':
-            logger.warn('format not recognised, start-tag %s' % (tag,))
-            self._format = 'unknown'
-
-        if (self._cdata != None) and (tag[:29] == 'http://www.w3.org/1999/xhtml '):
-            self._cdata += '<' + tag[29:]
-            for attr, val in attrs.items():
-                if attr[:29] == 'http://www.w3.org/1999/xhtml ':
-                    self._cdata += ' ' + attr[29:] + '="' + val.decode(self._encoding) + '"'
-            self._cdata += '>'
-
-        if tag[-8:] == ' channel':
-            logger.warn('unknown namespace for %s' % (tag,))
-        elif tag[-5:] == ' item':
-            logger.warn('unknown namespace for %s' % (tag,))
-        elif self._state & 0xfc:
-            if tag[-6:] == ' title':
-                logger.warn('unknown namespace for %s' % (tag,))
-            elif tag[-5:] == ' link':
-                logger.warn('unknown namespace for %s' % (tag,))
-            elif tag[-12:] == ' description':
-                logger.warn('unknown namespace for %s' % (tag,))
-
-    def unknown_endtag(self, tag):
-        if (self._cdata != None) and (tag[:29] == 'http://www.w3.org/1999/xhtml '):
-            self._cdata += '</' + tag[29:] + '>'
-
-    def _reset_cdata(self, data=None):
-        if data != None:
-            if data == '':
-                self._cdata = []
-                self._cdatalen = 0
-            else:
-                self._cdata = [data]
-                self._cdatalen = len(data)
-        else:
-            self._cdata = None
-            self._cdatalen = None
-
-    def _append_cdata(self, data):
-        if self._cdata != None:
-            self._cdatalen += len(data)
-            if self._cdatalen > 128 * 1024:
-                raise ValueError('item exceeds maximum allowed size')
-
-            if len(self._cdata):
-                if type(self._cdata[-1]) == type(data):
-                    self._cdata[-1] += data
-                else:
-                    self._cdata.append(data)
-            else:
-                self._cdata.append(data)
-
-    def cdata(self):
-        if self._cdata == None:
-            return None
-
-        s = array('u')
-        for elem in self._cdata:
-            if type(elem) == types.StringType:
-                s.extend(elem.decode(self._encoding))
-            else:
-                s.extend(elem)
-
-        return s.tounicode()
-
-    def handle_data(self, data):
-        self._append_cdata(data)
-
-    def handle_cdata(self, data):
-        self._append_cdata(data)
-
-    def handle_charref(self, name):
-        try:
-            if name[0] == 'x':
-                n = int(name[1:], 16)
-            else:
-                n = int(name)
-        except ValueError:
-            self.unknown_charref(name)
-            return
-        if not 0 <= n <= 65535:
-            self.unknown_charref(name)
-            return
-        self._append_cdata(unichr(n))
-
-    def unknown_entityref(self, entity):
-        try:
-            self._append_cdata(ENTITIES[entity].decode('iso8859-1'))
-        except KeyError:
-            logger.info('ignoring unknown entity ref %s' % (entity,))
-
-    def _current_elem(self):
-        if self._state & 0x08:
-            return self._items[-1]
-        elif self._state & 0x04:
-            return self._channel
-        else:
-            return None
-
-
-##
-# Database Schema:
-#  'S' -> resource_id sequence number (4-byte struct)
-#  'S' + resource_id -> URL
-#  'R' + URL -> resource_id (4-byte struct)
-#  'D' + resource_id -> Resource data
-#  'E' + resource_id -> error information (string)
-#  'I' + resource_id -> Resource info
-#  'H' + resource_id -> Resource history
-#  'T' + resource_id -> Resource times
-##
 class RSS_Resource:
     NR_ITEMS = 64
 
@@ -1691,7 +1373,7 @@ class RSS_Resource:
                 h.putheader('User-Agent', 'JabRSS (http://jabrss.cmeerw.org)')
                 if self._last_modified:
                     h.putheader('If-Modified-Since',
-                                rfc822.formatdate(self._last_modified))
+                                formatdate(self._last_modified))
                 if self._etag != None:
                     h.putheader('If-None-Match', self._etag)
                 h.endheaders()
@@ -1724,25 +1406,11 @@ class RSS_Resource:
                     else:
                         decoder = Null_Decompressor()
 
-                    content_maintype = headers.getmaintype()
-                    content_subtype = headers.getsubtype()
-                    charset = headers.getparam('charset')
-                    default_charset = None
-
-                    if content_maintype == 'text':
-                        if content_subtype.startswith('xml'):
-                            # or maybe iso8859-1
-                            default_charset = 'us-ascii'
-                        else:
-                            # not strictly conforming here...
-                            default_charset = 'iso8859-1'
-
-                    rss_parser = Feed_Parser((self._url_protocol, self._url_host, self._url_path),
-                                             charset, default_charset)
+                    rss_parser = Feed_Parser((self._url_protocol, self._url_host, self._url_path))
 
                     bytes_received = 0
                     bytes_processed = 0
-                    xml_started = 0
+                    xml_started = False
                     file_hash = hashlib.md5()
 
                     l = response.read(4096)
@@ -1755,9 +1423,9 @@ class RSS_Resource:
                         file_hash.update(data)
 
                         if not xml_started:
-                            data = string.lstrip( data)
+                            data = data.lstrip()
                             if data:
-                                xml_started = 1
+                                xml_started = True
 
                         bytes_processed = bytes_processed + len(data)
                         if bytes_processed > 1024 * 1024:
@@ -1773,7 +1441,12 @@ class RSS_Resource:
                     file_hash.update(data)
                     rss_parser.feed(data)
                     rss_parser.close()
-                    new_channel_info = normalize_obj(rss_parser._channel)
+
+                    error_log = rss_parser.get_error_log()
+                    if error_log:
+                        logger.warn('XML parser error log:\n%s' % (error_log,))
+
+                    new_channel_info = normalize_obj(rss_parser.get_info())
 
                     cursor = Cursor(db)
                     cursor.begin()
@@ -1785,8 +1458,7 @@ class RSS_Resource:
 
                     self._update_channel_info(new_channel_info, cursor)
 
-                    new_items = map(lambda x: normalize_item(x),
-                                    rss_parser._items)
+                    new_items = [ normalize_item(x) for x in rss_parser.get_items() ]
                     new_items.reverse()
 
                     items, first_item_id, nr_new_items = self._process_new_items(new_items, cursor)
@@ -1820,7 +1492,7 @@ class RSS_Resource:
                     redirect_url = headers.get('location', None)
                     if redirect_url:
                         base_url = '%s://%s/%s' % (url_protocol, url_host, url_path)
-                        redirect_url = urlparse.urljoin(base_url, redirect_url)
+                        redirect_url = urljoin(base_url, redirect_url)
                         logger.info('Following redirect (%d) to "%s"' % (errcode, redirect_url))
                         url_protocol, url_host, url_path = split_url(redirect_url)
                         redirect_tries = -redirect_tries
@@ -1847,14 +1519,16 @@ class RSS_Resource:
             error_info = 'HTTP: unknown protocol'
         except httplib.HTTPException, e:
             error_info = 'HTTP: ' + str(e)
+        except FeedError, e:
+            error_info = 'feed: ' + str(e)
+        except AssertionError, e:
+            error_info = 'assertion: ' + str(e)
         except DecompressorError, e:
             error_info = 'decompressor: ' + str(e)
         except UnicodeError, e:
             error_info = 'encoding: ' + str(e)
         except LookupError, e:
             error_info = 'encoding: ' + str(e)
-        except xmllib.Error, e:
-            error_info = 'RDF/XML parser: ' + str(e)
         except ValueError, e:
             error_info = 'misc: ' + str(e)
         except:
@@ -1876,20 +1550,20 @@ class RSS_Resource:
             if feed_xml_downloaded:
                 if nr_new_items > 0:
                     # downloaded and new items available, good
-                    self._penalty = (5 * self._penalty) / 6
+                    self._penalty = (5 * self._penalty) // 6
                 elif not feed_xml_changed:
                     # downloaded, but not changed, very bad
-                    self._penalty = (3 * self._penalty) / 4 + 256
+                    self._penalty = (3 * self._penalty) // 4 + 256
                 else:
                     # downloaded and changed, but no new items, bad
-                    self._penalty = (15 * self._penalty) / 16 + 64
+                    self._penalty = (15 * self._penalty) // 16 + 64
             else:
                 # "not modified" response from server, good
-                self._penalty = (3 * self._penalty) / 4
+                self._penalty = (3 * self._penalty) // 4
 
         if redirect_penalty > 0:
             # penalty for temporary redirects
-            self._penalty = (7 * self._penalty) / 8 + 128
+            self._penalty = (7 * self._penalty) // 8 + 128
 
 
         cursor.execute('UPDATE resource SET last_modified=?, last_updated=?, etag=?, invalid_since=?, penalty=? WHERE rid=?',
@@ -1947,11 +1621,11 @@ class RSS_Resource:
             self._history.append((int(time.time()), nr_new_items))
             self._history = self._history[-16:]
 
-            history_times = map(lambda x: x[0], self._history)
+            history_times = [ x[0] for x in self._history ]
             if len(history_times) < 16:
                 history_times += (16 - len(history_times)) * [None]
 
-            history_nr = map(lambda x: x[1], self._history)
+            history_nr = [ x[1] for x in self._history ]
             if len(history_nr) < 16:
                 history_nr += (16 - len(history_nr)) * [None]
 
@@ -1974,20 +1648,20 @@ class RSS_Resource:
         nr_old_items = len(items)
         nr_new_items = 0
 
-        tstamplist = filter(lambda x: x != None,
-                            map(lambda x: x.published, items))
+        tstamplist = list(filter(lambda x: x != None,
+                                 [ x.published for x in items ]))
         tstamplist.sort()
 
         if (len(tstamplist) > 4) and (len(new_items) > RSS_Resource.NR_ITEMS):
-            tstamplist = tstamplist[len(tstamplist) / 2 : -len(tstamplist) / 6]
-            cutoff = sum(tstamplist) / len(tstamplist)
+            tstamplist = tstamplist[len(tstamplist) // 2 : -len(tstamplist) // 6]
+            cutoff = sum(tstamplist) // len(tstamplist)
         elif len(tstamplist) > 2:
             cutoff = tstamplist[0]
         else:
-            cutoff = None
+            cutoff = 0
 
-        new_items = filter(lambda x: (x.published == None) or (x.published >= cutoff), new_items)
-        new_items.sort(lambda x, y: cmp(x.published, y.published))
+        new_items = list(filter(lambda x: (x.published == None) or (x.published >= cutoff), new_items))
+        new_items.sort(key=lambda x: x.published or 0)
 
         for item in new_items:
             found = False
@@ -2044,9 +1718,9 @@ class RSS_Resource:
             time_span = self._last_updated - self._history[0][0]
 
             if hist_items >= 12:
-                time_span_old = self._history[hist_items / 2][0] - self._history[0][0]
+                time_span_old = self._history[hist_items // 2][0] - self._history[0][0]
                 sum_items_old = reduce(lambda x, y: (y[0], x[1] + y[1]),
-                                       self._history[1:hist_items / 2 + 1])[1]
+                                       self._history[1:hist_items // 2 + 1])[1]
                 if (3 * sum_items_old < sum_items) and (5 * time_span_old < time_span):
                     time_span = time_span_old
                     sum_items = sum_items_old
@@ -2055,21 +1729,21 @@ class RSS_Resource:
                     time_span = time_span - time_span_old
                     sum_items = sum_items - sum_items_old
 
-            interval = time_span / sum_items / INTERVAL_DIVIDER
+            interval = time_span // sum_items // INTERVAL_DIVIDER
 
             # apply a bonus for well-behaved feeds
-            interval = 32 * interval / (64 - self._penalty / 28)
-            max_interval = 32 * max_interval / (64 - self._penalty / 28)
-            min_interval = 32 * min_interval / (48 - self._penalty / 64)
+            interval = 32 * interval // (64 - self._penalty // 28)
+            max_interval = 32 * max_interval // (64 - self._penalty // 28)
+            min_interval = 32 * min_interval // (48 - self._penalty // 64)
         elif len(self._history) == 1:
             time_span = self._last_updated - self._history[0][0]
 
-            interval = 30*60 + time_span / 3
+            interval = 30*60 + time_span // 3
             min_interval = 60*60
         elif self._invalid_since:
             time_span = self._last_updated - self._invalid_since
 
-            interval = 4*60*60 + time_span / 4
+            interval = 4*60*60 + time_span // 4
             max_interval = 48*60*60
         else:
             interval = 8*60*60
@@ -2084,7 +1758,7 @@ class RSS_Resource:
 
         # and add some random factor
         if randomize:
-            return self._last_updated + interval + int(random.normalvariate(30, 50 + interval / 50))
+            return self._last_updated + interval + int(random.normalvariate(30, 50 + interval // 50))
         else:
             return self._last_updated + interval
 
@@ -2119,12 +1793,12 @@ def RSS_Resource_simplify(url):
 if __name__ == '__main__':
     import locale, sys
 
-    locale.setlocale(locale.LC_CTYPE, '')
-    encoding = locale.getlocale()[1]
-    if not encoding:
-        encoding = 'us-ascii'
-    sys.stdout = codecs.getwriter(encoding)(sys.stdout, errors='replace')
-    sys.stderr = codecs.getwriter(encoding)(sys.stderr, errors='replace')
+    if sys.version_info[0] == 2:
+        encoding = locale.getlocale()[1]
+        if not encoding:
+            encoding = 'us-ascii'
+        sys.stdout = codecs.getwriter(encoding)(sys.stdout, errors='replace')
+        sys.stderr = codecs.getwriter(encoding)(sys.stderr, errors='replace')
 
     logger = logging.getLogger()
     logger.addHandler(logging.StreamHandler())
