@@ -1384,7 +1384,11 @@ class RSS_Resource:
                 headers = response.msg
 
                 # check the error code
-                if (errcode >= 200) and (errcode < 300):
+                # handle "304 Not Modified"
+                if errcode == 304 or errcode = 412:
+                    # RSS resource is valid
+                    self._invalid_since = None
+                elif (errcode >= 200) and (errcode < 300):
                     feed_xml_downloaded = True
 
                     self._last_modified = parse_Rfc822DateTime(headers.get('last-modified', None))
@@ -1464,10 +1468,6 @@ class RSS_Resource:
                     items, first_item_id, nr_new_items = self._process_new_items(new_items, cursor)
                     del new_items
 
-                # handle "304 Not Modified"
-                elif errcode == 304:
-                    # RSS resource is valid
-                    self._invalid_since = None
                 # handle "301 Moved Permanently", "302 Found" and
                 # "307 Temporary Redirect"
                 elif (errcode >= 300) and (errcode < 400):
