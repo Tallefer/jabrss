@@ -118,9 +118,8 @@ if https_proxy and (https_proxy[:7] == 'http://'):
 else:
     https_proxy = None
 
-socks_proxy = os.getenv('socks_proxy')
-
 RSS_Resource.http_proxy = http_proxy
+sqlite3.enable_shared_cache(True)
 
 
 class Resource_Guard:
