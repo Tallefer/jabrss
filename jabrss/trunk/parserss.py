@@ -708,6 +708,8 @@ def html2plain(elem):
                 self.__errors += 1
 
         def handle_starttag(self, tag, attrs):
+            if tag in ('br', 'p'):
+                self.__buf.write('\n')
             self.__processed += 1
 
         def handle_endtag(self, tag):
