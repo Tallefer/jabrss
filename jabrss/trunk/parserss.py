@@ -1385,7 +1385,7 @@ class RSS_Resource:
 
                 # check the error code
                 # handle "304 Not Modified"
-                if errcode == 304 or errcode = 412:
+                if errcode == 304 or errcode == 412:
                     # RSS resource is valid
                     self._invalid_since = None
                 elif (errcode >= 200) and (errcode < 300):
