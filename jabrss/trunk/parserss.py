@@ -356,8 +356,28 @@ class HTTPConnection(httplib.HTTPConnection):
         self.timeout = timeout
         self.__read_timeout = read_timeout
 
+    def __connect_v25(self):
+        for res in socket.getaddrinfo(self.host, self.port, 0,
+                                      socket.SOCK_STREAM):
+            af, socktype, proto, canonname, sa = res
+            try:
+                self.sock = socket.socket(af, socktype, proto)
+                self.sock.settimeout(self.timeout)
+                self.sock.connect(sa)
+            except socket.error, msg:
+                if self.sock:
+                    self.sock.close()
+                self.sock = None
+                continue
+            break
+        if not self.sock:
+            raise socket.error, msg
+
     def connect(self):
-        httplib.HTTPConnection.connect(self)
+        if sys.version_info >= (2, 6, 0):
+            httplib.HTTPConnection.connect(self)
+        else:
+            self.__connect_v25()
         self.sock.settimeout(self.__read_timeout)
 
     def putrequest(self, method, url):
@@ -374,8 +394,32 @@ class HTTPSConnection(httplib.HTTPSConnection):
         self.timeout = timeout
         self.__read_timeout = read_timeout
 
+    def __connect_v25(self):
+        sock = None
+        for res in socket.getaddrinfo(self.host, self.port, 0,
+                                      socket.SOCK_STREAM):
+            af, socktype, proto, canonname, sa = res
+            try:
+                sock = socket.socket(af, socktype, proto)
+                sock.settimeout(self.timeout)
+                sock.connect(sa)
+            except socket.error, msg:
+                if sock:
+                    sock.close()
+                sock = None
+                continue
+            break
+        if not sock:
+            raise socket.error, msg
+        else:
+            ssl = socket.ssl(sock, self.key_file, self.cert_file)
+            self.sock = httplib.FakeSocket(sock, ssl)
+
     def connect(self):
-        httplib.HTTPSConnection.connect(self)
+        if sys.version_info >= (2, 6, 0):
+            httplib.HTTPSConnection.connect(self)
+        else:
+            self.__connect_v25()
         self.sock.settimeout(self.__read_timeout)
 
     def putrequest(self, method, url):
