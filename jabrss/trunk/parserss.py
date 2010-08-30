@@ -197,6 +197,9 @@ def normalize_item(item):
     if not hasattr(item, 'descr_xhtml'):
         item.descr_xhtml = None
 
+    if item.descr_plain:
+        item.descr_plain = item.descr_plain[:4096]
+
     del item.descr
 
     return item
