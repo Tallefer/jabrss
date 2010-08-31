@@ -1444,6 +1444,8 @@ class JabRSSStream(XmppStream):
         reply_body = None
 
         for arg in args:
+            url = ''
+
             try:
                 url = arg.encode('ascii')
 
@@ -1484,9 +1486,10 @@ class JabRSSStream(XmppStream):
         reply_body = None
 
         for arg in args:
-            url = arg.encode('ascii')
+            url = ''
 
             try:
+                url = arg.encode('ascii')
                 resource = storage.get_cached_resource(url)
                 resource.lock()
                 try:
@@ -1502,6 +1505,10 @@ class JabRSSStream(XmppStream):
                 reply_body = 'For some reason you couldn\'t be unsubscribed from %s' % (url,)
             except ValueError:
                 reply_body = 'No need to unsubscribe, you weren\'t subscribed to %s anyway' % (url,)
+            except:
+                log_message(user.jid(), 'error unsubscribing from', url)
+                traceback.print_exc(file=sys.stdout)
+                reply_body = 'For some reason you couldn\'t be unsubscribed from %s' % (url,)
 
             if reply_body:
                 reply = Stanza.Message(to = stanza.get_from(),
@@ -1515,9 +1522,10 @@ class JabRSSStream(XmppStream):
         reply_body = None
 
         for arg in args:
-            url = arg.encode('ascii')
+            url = ''
 
             try:
+                url = arg.encode('ascii')
                 resource = storage.get_cached_resource(url)
 
                 last_updated, last_modified, invalid_since = resource.times()
@@ -1565,6 +1573,10 @@ class JabRSSStream(XmppStream):
             except UrlError, url_error:
                 reply_body = 'Invalid URL %s (%s)' % (url, url_error.args[0])
             except KeyError:
+                reply_body = 'No information available about %s' % (url,)
+            except:
+                log_message(user.jid(), 'no information for', url)
+                traceback.print_exc(file=sys.stdout)
                 reply_body = 'No information available about %s' % (url,)
 
             if reply_body:
