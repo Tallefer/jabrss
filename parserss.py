@@ -1172,6 +1172,8 @@ class Feed_Parser:
         info = self.__handler.info
         if info != None:
             info.link = self.__resolve_link(info.link)
+        else:
+            raise Exception('No feed information found')
 
         for item in self.__handler.elements:
             item.link = self.__resolve_link(item.link)
