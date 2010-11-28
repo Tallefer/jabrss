@@ -7,7 +7,6 @@ from xmpplify import Element, JID, Stanza, XmppStream
 class EchoBot(XmppStream):
     def __init__(self, jid, host, password, port=5222):
         self._jid, self._host, self._port = jid, host, port
-        self._sock = socket.create_connection((host, port))
         self._encoding = 'utf-8'
         self._io_sync = threading.Lock()
         self._closed = threading.Event()
