@@ -166,17 +166,17 @@ class StatusBot(XmppStream):
                 else:
                     reply.set_body('nothing')
                 self.send(reply.asbytes(self._encoding))
-            elif b[0] == 'in' and len(b) == 3:
+            elif b[0] == 'in' and len(b) >= 3:
                 try:
                     ts = int(time.time()) + int(b[1])
                     if b[2] != '-':
-                        status = b[2]
+                        status = ' '.join(b[2:])
                     else:
                         status = None
                     self.schedule_event(ts, status)
                 except ValueError:
                     pass
-            elif b[0] == 'at' and len(b) == 3:
+            elif b[0] == 'at' and len(b) >= 3:
                 try:
                     tm = time.gmtime(time.time())
                     hours = b[1].split(':', 2)
@@ -189,7 +189,7 @@ class StatusBot(XmppStream):
                     else:
                         ts -= time.timezone
                     if b[2] != '-':
-                        status = b[2]
+                        status = ' '.join(b[2:])
                     else:
                         status = None
                     self.schedule_event(ts, status)
