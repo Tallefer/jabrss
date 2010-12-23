@@ -1640,7 +1640,9 @@ class JabRSSStream(XmppStream):
         body = string.strip(body)
         log_message('message', typ, sender.tostring(), body)
 
-        if typ in ('normal', 'chat'):
+        if sender.user() == None:
+            log_message('ignoring server message from', sender.tostring())
+        elif typ in ('normal', 'chat'):
             try:
                 user, jid_resource = storage.get_user(sender)
                 unknown_msg = False
