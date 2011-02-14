@@ -333,9 +333,9 @@ while not bot.terminated():
 
             bot.feed(data)
     except socket.error:
-        log_message('socket error')
+        print('socket error')
     except SyntaxError:
-        log_message('syntax error')
+        print('syntax error')
     except KeyboardInterrupt:
         bot.terminate()
 
