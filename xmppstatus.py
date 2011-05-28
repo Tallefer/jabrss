@@ -308,7 +308,7 @@ while not bot.terminated():
         delay = 15
         if int(time.time()) - last_attempt < 30:
             delay += 45
-        print('waiting for next connection attempt in %d seconds', (delay,))
+        print('waiting for next connection attempt in %d seconds' % (delay,))
         time.sleep(delay)
 
     last_attempt = int(time.time())
