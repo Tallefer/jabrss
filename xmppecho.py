@@ -1,6 +1,7 @@
 #!/usr/bin/python
 import ssl, socket, threading
 
+from getpass import getpass
 from xmpplify import Element, JID, Stanza, XmppStream
 
 
@@ -139,7 +140,7 @@ if not hasattr(__builtins__, 'raw_input'):
 
 jid = JID(raw_input('JID: '))
 server = raw_input('server: ')
-password = raw_input('password: ')
+password = getpass('password: ')
 
 bot = EchoBot(jid, server, password)
 bot.connect()
