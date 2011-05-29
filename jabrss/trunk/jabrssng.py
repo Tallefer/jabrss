@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (C) 2001-2010, Christof Meerwald
+# Copyright (C) 2001-2011, Christof Meerwald
 # http://jabrss.cmeerw.org
 
 # This program is free software; you can redistribute it and/or modify
@@ -19,6 +19,7 @@
 import base64, bisect, codecs, getopt, locale, logging, os, ssl, socket
 import sqlite3, string, sys, thread, threading, time, traceback, types
 
+from getpass import getpass
 from xmpplify import tobytes, Element, JID, Stanza, XmppStream
 
 from parserss import RSS_Resource, RSS_Resource_id2url, RSS_Resource_simplify
@@ -96,7 +97,7 @@ if JABBER_SERVER == None:
 if JABBER_USER == None:
     JABBER_USER = raw_input('Username: ')
 if JABBER_PASSWORD == None:
-    JABBER_PASSWORD = raw_input('Password: ')
+    JABBER_PASSWORD = getpass('Password: ')
 
 if JABBER_HOST == None:
     JABBER_HOST = JABBER_SERVER

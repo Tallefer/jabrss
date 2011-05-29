@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (C) 2010, Christof Meerwald
+# Copyright (C) 2010-2011, Christof Meerwald
 # http://jabrss.cmeerw.org
 
 # This program is free software; you can redistribute it and/or modify
@@ -18,6 +18,7 @@
 
 import bisect, getopt, socket, ssl, sys, thread, threading, time
 
+from getpass import getpass
 from xmpplify import Element, JID, Stanza, XmppStream
 
 
@@ -293,7 +294,7 @@ if JABBER_JID == None:
 if JABBER_HOST == None:
     JABBER_HOST = raw_input('Host: ')
 if JABBER_PASSWORD == None:
-    JABBER_PASSWORD = raw_input('Password: ')
+    JABBER_PASSWORD = getpass('Password: ')
 
 if JABBER_HOST == '':
     JABBER_HOST = JABBER_JID.domain()
