@@ -18,7 +18,10 @@
 
 import base64, re, threading, types
 
-from xml.etree.cElementTree import Element, XMLParser
+try:
+    from xml.etree.cElementTree import Element, XMLParser
+except ImportError:
+    from xml.etree.ElementTree import Element, XMLParser
 
 
 __all__ = [
