@@ -16,6 +16,8 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
+from __future__ import with_statement
+
 import bisect, getopt, socket, ssl, sys, thread, threading, time
 
 from getpass import getpass
@@ -86,42 +88,30 @@ class StatusBot(XmppStream):
 
 
     def sock(self):
-        self._io_sync.acquire()
-        try:
+        with self._io_sync:
             return self._sock
-        finally:
-            self._io_sync.release()
 
     def send(self, data):
-        self._io_sync.acquire()
-        try:
+        with self._io_sync:
             if self._sock != None:
                 try:
                     self._sock.sendall(data)
                 except socket.error:
                     self._stream_closed()
                     raise
-        finally:
-            self._io_sync.release()
 
     def closed(self):
-        self._io_sync.acquire()
-        try:
+        with self._io_sync:
             self._stream_closed()
-        finally:
-            self._io_sync.release()
 
     def shutdown(self):
-        self._io_sync.acquire()
-        try:
+        with self._io_sync:
             sock = self._stream_closed()
             if sock != None:
                 try:
                     sock.shutdown(socket.SHUT_WR)
                 except socket.error:
                     pass
-        finally:
-            self._io_sync.release()
 
     def wait(self):
         self._closed.wait()
@@ -217,47 +207,43 @@ class StatusBot(XmppStream):
         self._event_queue_cond.release()
 
     def schedule_event(self, ts, status):
-        self._event_queue_cond.acquire()
-        bisect.insort(self._event_queue, (ts, status))
-        if self._event_queue[0] == (ts, status):
-            self._event_queue_cond.notifyAll()
-
-        self._event_queue_cond.release()
+        with self._event_queue_cond:
+            bisect.insort(self._event_queue, (ts, status))
+            if self._event_queue[0] == (ts, status):
+                self._event_queue_cond.notifyAll()
 
     def run(self):
         try:
-            self._event_queue_cond.acquire()
-            while not self._term_flag:
-                if self._event_queue:
-                    timeout = self._event_queue[0][0] - int(time.time())
+            with self._event_queue_cond:
+                while not self._term_flag:
+                    if self._event_queue:
+                        timeout = self._event_queue[0][0] - int(time.time())
 
-                    if timeout > 3:
-                        self._event_queue_cond.wait(timeout)
-                    else:
-                        status = self._event_queue[0][1]
-                        del self._event_queue[0]
-
-                        # broadcast new status
-                        presence = Stanza.Presence()
-                        presence.set_priority('-100')
-                        if status:
-                            print('%s status %s' % (
-                                    time.asctime(time.localtime(time.time())),
-                                    status))
-
-                            presence.set_show('xa')
-                            presence.set_status(status)
+                        if timeout > 3:
+                            self._event_queue_cond.wait(timeout)
                         else:
-                            print('%s offline' % (
-                                    time.asctime(time.localtime(time.time())),))
+                            status = self._event_queue[0][1]
+                            del self._event_queue[0]
 
-                            presence.set_type('unavailable')
+                            # broadcast new status
+                            presence = Stanza.Presence()
+                            presence.set_priority('-100')
+                            if status:
+                                print('%s status %s' % (
+                                        time.asctime(time.localtime(time.time())),
+                                        status))
 
-                        self.send(presence.asbytes(self._encoding))
-                else:
-                    self._event_queue_cond.wait()
+                                presence.set_show('xa')
+                                presence.set_status(status)
+                            else:
+                                print('%s offline' % (
+                                        time.asctime(time.localtime(time.time())),))
 
-            self._event_queue_cond.release()
+                                presence.set_type('unavailable')
+
+                            self.send(presence.asbytes(self._encoding))
+                    else:
+                        self._event_queue_cond.wait()
         except:
             traceback.print_exc(file=sys.stdout)
             sys.exit(1)
