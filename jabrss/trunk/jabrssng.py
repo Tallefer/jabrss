@@ -16,6 +16,8 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
+from __future__ import with_statement
+
 import base64, bisect, codecs, getopt, locale, logging, os, ssl, socket
 import sqlite3, string, sys, thread, threading, time, traceback, types
 
@@ -33,7 +35,7 @@ logger = logging.getLogger('JabRSS')
 def log_message(*msg):
     logger.info(u' '.join(map(lambda x: unicode(x), msg)))
 
-init_parserss(dbsync_obj = thread.allocate_lock())
+init_parserss(dbsync_obj = threading.Lock())
 
 
 TEXT_WELCOME = '''\
@@ -67,40 +69,34 @@ Please refer to the JabRSS command reference at http://dev.cmeerw.org/book/view/
 And of course, if you like this service you might also consider a donation, see http://cmeerw.org/donate.html'''
 
 
-JABBER_SERVER = None
-JABBER_HOST = None
-JABBER_USER = None
-JABBER_PASSWORD = None
+JABRSS_JID = None
+JABRSS_HOST = None
+JABRSS_PASSWORD = None
 MAX_MESSAGE_SIZE = 20000
 
 
-opts, args = getopt.getopt(sys.argv[1:], 'f:h:p:s:u:',
+opts, args = getopt.getopt(sys.argv[1:], 'f:h:p:j:',
                            ['password-file=', 'password=',
-                            'server=', 'connect-host=', 'username='])
+                            'jid=', 'connect-host='])
 
 for optname, optval in opts:
     if optname in ('-f', '--password-file'):
         fd = open(optval, 'r')
-        JABBER_PASSWORD = string.strip(fd.readline())
+        JABRSS_PASSWORD = string.strip(fd.readline())
         fd.close()
-    elif optname in ('-c', '--connect-host'):
-        JABBER_HOST = optval
+    elif optname in ('-h', '--connect-host'):
+        JABRSS_HOST = optval
     elif optname in ('-p', '--password'):
-        JABBER_PASSWORD = optval
-    elif optname in ('-s', '--server'):
-        JABBER_SERVER = optval
-    elif optname in ('-u', '--username'):
-        JABBER_USER = optval
+        JABRSS_PASSWORD = optval
+    elif optname in ('-j', '--jid'):
+        JABRSS_JID = JID(optval)
 
-if JABBER_SERVER == None:
-    JABBER_SERVER = raw_input('Jabber server: ')
-if JABBER_USER == None:
-    JABBER_USER = raw_input('Username: ')
-if JABBER_PASSWORD == None:
-    JABBER_PASSWORD = getpass('Password: ')
-
-if JABBER_HOST == None:
-    JABBER_HOST = JABBER_SERVER
+if JABRSS_JID == None:
+    JABRSS_JID = JID(raw_input('JabRSS JID: '))
+if JABRSS_HOST == None:
+    JABRSS_HOST = raw_input('Host: ')
+if JABRSS_PASSWORD == None:
+    JABRSS_PASSWORD = getpass('Password: ')
 
 
 http_proxy = os.getenv('http_proxy')
@@ -123,13 +119,6 @@ RSS_Resource.http_proxy = http_proxy
 sqlite3.enable_shared_cache(True)
 
 
-class Resource_Guard:
-    def __init__(self, cleanup_handler):
-        self._cleanup_handler = cleanup_handler
-
-    def __del__(self):
-        self._cleanup_handler()
-
 def get_db():
     db = sqlite3.Connection('jabrss.db', 60000)
     db.isolation_level = None
@@ -137,26 +126,83 @@ def get_db():
 
     return db
 
+
+class FlexibleLocker:
+    def __init__(self, lock, active = True):
+        self._lock, self._active = lock, active
+        self._locked = False
+
+    def __enter__(self):
+        self.lock()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.unlock()
+
+    def locked(self):
+        if not self._locked and self._active and self._lock != None:
+            self._locked = True
+
+    def lock(self):
+        if not self._locked and self._active and self._lock != None:
+            self._lock.acquire()
+            self._locked = True
+
+    def unlock(self):
+        if self._locked and self._active and self._lock != None:
+            self._lock.release()
+            self._locked = False
+
+    def replace(self, lock):
+        self.unlock()
+        self._lock = lock
+        self.lock()
+
+
 class Cursor:
-    def __init__(self, _db):
-        self._txn = False
-        self._cursor = _db.cursor()
+    def __init__(self, dbconn, parent = None):
+        self._txn, self._locked = False, False
+        self._parent = parent
+        if self._parent == None:
+            if not hasattr(dbconn, 'cursor'):
+                self._cursor = dbconn().cursor()
+            else:
+                self._cursor = dbconn.cursor()
+        else:
+            self._cursor = None
 
-        db_sync.acquire()
+    def __enter__(self):
+        if self._parent == None:
+            return self
+        else:
+            return self._parent
 
-    def __del__(self):
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._parent == None:
+            self.commit()
+
+    def begin(self):
+        if not self._locked:
+            db_sync.acquire()
+            self._locked = True
+
+        if not self._txn:
+            self._cursor.execute('BEGIN')
+            self._txn = True
+
+    def commit(self):
         try:
             if self._txn:
                 self._cursor.execute('COMMIT')
+                self._txn = False
         finally:
-            db_sync.release()
-
-
-    def begin(self):
-        self._cursor.execute('BEGIN')
-        self._txn = True
+            if self._locked:
+                db_sync.release()
+                self._locked = False
 
     def execute(self, stmt, bindings=None):
+        self.begin()
+
         if bindings == None:
             return self._cursor.execute(stmt)
         else:
@@ -174,7 +220,7 @@ class Cursor:
         raise AttributeError('object has no attribute \'%s\'' % (name,))
 
 db = get_db()
-db_sync = thread.allocate_lock()
+db_sync = threading.Lock()
 
 main_res_db = RSS_Resource_db()
 
@@ -182,10 +228,10 @@ main_res_db = RSS_Resource_db()
 class DataStorage:
     def __init__(self):
         self._users = {}
-        self._users_sync = thread.allocate_lock()
+        self._users_sync = threading.Lock()
         self._resources = {}
         self._res_uids = {}
-        self._resources_sync = thread.allocate_lock()
+        self._resources_sync = threading.Lock()
 
         self._redirect_db = None
 
@@ -194,14 +240,11 @@ class DataStorage:
         redirect_resource = self.get_resource(redirect_url, db)
 
         # prevent resource from being evicted until redirect is processed
-        cursor = Cursor(self._redirect_db)
-        try:
+        with Cursor(self._redirect_db) as cursor:
             try:
                 dummy_user.add_resource(redirect_resource, None, cursor)
             except ValueError:
                 pass
-        finally:
-            del cursor
 
         redirect_resource.unlock()
 
@@ -211,16 +254,12 @@ class DataStorage:
             redirect_resource.unlock()
             redirects.insert(0, (redirect_resource, new_items, next_item_id))
         elif (redirect_target != None) or (redirect_resource._invalid_since):
-            redirect_resource.lock()
-            cursor = Cursor(self._redirect_db)
-            try:
-                try:
-                    dummy_user.remove_resource(redirect_resource, cursor)
-                except ValueError:
-                    pass
-            finally:
-                del cursor
-            redirect_resource.unlock()
+            with redirect_resource.sync():
+                with Cursor(self._redirect_db) as cursor:
+                    try:
+                        dummy_user.remove_resource(redirect_resource, cursor)
+                    except ValueError:
+                        pass
 
         if redirect_target != None:
             redirect_resource = redirect_target
@@ -228,13 +267,11 @@ class DataStorage:
         return redirect_resource, redirects
 
 
-    def users_lock(self):
-        self._users_sync.acquire()
-        return Resource_Guard(lambda sync=self._users_sync: sync.release())
+    def users_sync(self):
+        return self._users_sync
 
-    def resources_lock(self):
-        self._resources_sync.acquire()
-        return Resource_Guard(lambda sync=self._resources_sync: sync.release())
+    def resources_sync(self):
+        return self._resources_sync
 
 
     # get resource (by URL) from cache, database or create new object
@@ -243,72 +280,58 @@ class DataStorage:
     def get_resource(self, url, res_db=None, lock=True, follow_redirect=True):
         resource_url = RSS_Resource_simplify(url)
 
-        if lock:
-            resources_unlocker = self.resources_lock()
-        else:
-            resources_unlocker = None
+        with FlexibleLocker(self.resources_sync(), lock) as resources_locker:
+            while resource_url != None:
+                cached_resource = True
 
-        while resource_url != None:
-            cached_resource = True
+                try:
+                    resource = self._resources[resource_url]
+                    resources_locker.unlock()
+                    if lock:
+                        resource.lock()
+                    resources_locker.lock()
+                except KeyError:
+                    resources_locker.unlock()
+                    resource = RSS_Resource(resource_url, res_db)
+                    if lock:
+                        resource.lock()
+                    resources_locker.lock()
 
-            try:
-                resource = self._resources[resource_url]
-                if lock:
-                    resources_unlocker = None
-                    resource.lock()
-                    resources_unlocker = self.resources_lock()
-            except KeyError:
-                if lock:
-                    resources_unlocker = None
-                resource = RSS_Resource(resource_url, res_db)
-                if lock:
-                    resource.lock()
-                    resources_unlocker = self.resources_lock()
+                    cached_resource = False
 
-                cached_resource = False
+                if follow_redirect:
+                    resource_url, redirect_seq = resource.redirect_info(res_db)
+                else:
+                    resource_url, redirect_seq = None, None
 
-            if follow_redirect:
-                resource_url, redirect_seq = resource.redirect_info(res_db)
-            else:
-                resource_url, redirect_seq = None, None
+                if resource_url != None and lock:
+                    resource.unlock()
 
-            if resource_url != None and lock:
-                resource.unlock()
+            if not cached_resource:
+                self._resources[resource.url()] = resource
+                self._resources[resource.id()] = resource
+                RSS_Resource.schedule_update(resource)
 
-        if not cached_resource:
-            self._resources[resource.url()] = resource
-            self._resources[resource.id()] = resource
-            RSS_Resource.schedule_update(resource)
-
-        del resources_unlocker
         return resource
 
     # @throws KeyError
     def get_cached_resource(self, url):
         resource_url = RSS_Resource_simplify(url)
 
-        resources_unlocker = self.resources_lock()
-        try:
+        with self.resources_sync():
             return self._resources[resource_url]
-        finally:
-            del resources_unlocker
 
     def get_resource_by_id(self, res_id, res_db=None, follow_redirect=False):
-        resources_unlocker = self.resources_lock()
-
-        try:
+        with self.resources_sync():
             try:
                 return self._resources[res_id]
             except KeyError:
                 resource_url = RSS_Resource_id2url(res_id)
                 return self.get_resource(resource_url, res_db, False,
                                          follow_redirect)
-        finally:
-            del resources_unlocker
 
     def evict_resource(self, resource):
-        resources_unlocker = self.resources_lock()
-        try:
+        with self.resources_sync():
             try:
                 del self._resources[resource.url()]
             except KeyError:
@@ -322,11 +345,9 @@ class DataStorage:
                 del self._res_uids[resource.id()]
             except KeyError:
                 pass
-        finally:
-            del resources_unlocker
 
 
-    # @precondition self.resources_lock()
+    # @precondition self.resources_sync()
     def get_resource_uids(self, resource, db_cursor=None):
         res_id = resource.id()
 
@@ -335,18 +356,13 @@ class DataStorage:
         except KeyError:
             res_uids = []
 
-            if db_cursor == None:
-                cursor = Cursor(db)
-            else:
-                cursor = db_cursor
-
-            result = cursor.execute('SELECT uid FROM user_resource WHERE rid=?',
-                                    (res_id,))
-            for row in result:
-                res_uids.append(row[0])
+            with Cursor(db, db_cursor) as cursor:
+                result = cursor.execute('SELECT uid FROM user_resource WHERE rid=?',
+                                        (res_id,))
+                for row in result:
+                    res_uids.append(row[0])
 
             self._res_uids[res_id] = res_uids
-
 
         return res_uids
 
@@ -381,10 +397,9 @@ class DataStorage:
             except KeyError:
                 return None, None
 
-            users_unlocker = self.users_lock()
-            self._users[key] = user
-            self._users[user.uid()] = user
-            del users_unlocker
+            with self.users_sync():
+                self._users[key] = user
+                self._users[user.uid()] = user
 
             for res_id in user._res_ids:
                 try:
@@ -396,33 +411,26 @@ class DataStorage:
             return user, jid_resource
 
     def evict_user(self, user):
-        users_unlocker = self.users_lock()
-        try:
-            del self._users[user.jid()]
-        except KeyError:
-            pass
+        with self.users_sync():
+            try:
+                del self._users[user.jid()]
+            except KeyError:
+                pass
 
-        try:
-            del self._users[user.uid()]
-        except KeyError:
-            pass
-        del users_unlocker
+            try:
+                del self._users[user.uid()]
+            except KeyError:
+                pass
 
     def evict_all_users(self):
-        users_unlocker = self.users_lock()
-        self._users = {}
-        del users_unlocker
+        with self.users_sync():
+            self._users = {}
 
 
     def remove_user(self, user):
-        cursor = Cursor(db)
-        cursor.begin()
-
-        try:
+        with Cursor(db) as cursor:
             cursor.execute('DELETE FROM user WHERE uid=?',
                            (user.uid(),))
-        finally:
-            del cursor
 
         log_message('user %s (id %d) deleted' % (user._jid, user._uid))
         self.evict_user(user)
@@ -488,45 +496,43 @@ class JabberUser:
         self._store_messages = 16
         self._size_limit = None
 
-        cursor = Cursor(db)
+        with Cursor(db) as cursor:
+            try:
+                cursor.execute('SELECT uid, conf, store_messages, size_limit FROM user WHERE jid=?',
+                           (self._jid,))
+                self._uid, self._configuration, self._store_messages, self._size_limit = cursor.next()
+            except StopIteration:
+                if not create:
+                    raise KeyError(jid)
 
-        try:
-            cursor.execute('SELECT uid, conf, store_messages, size_limit FROM user WHERE jid=?',
-                       (self._jid,))
-            self._uid, self._configuration, self._store_messages, self._size_limit = cursor.next()
-        except StopIteration:
-            if not create:
-                raise KeyError(jid)
+                cursor.execute('INSERT INTO user (jid, conf, store_messages, size_limit, since) VALUES (?, ?, ?, ?, ?)',
+                               (self._jid, self._configuration, self._store_messages, self._size_limit, get_week_nr()))
+                self._uid = cursor.lastrowid
 
-            cursor.execute('INSERT INTO user (jid, conf, store_messages, size_limit, since) VALUES (?, ?, ?, ?, ?)',
-                           (self._jid, self._configuration, self._store_messages, self._size_limit, get_week_nr()))
-            self._uid = cursor.lastrowid
-
-        if self._size_limit == None:
-            self._size_limit = 0
-        else:
-            self._size_limit *= 16
+            if self._size_limit == None:
+                self._size_limit = 0
+            else:
+                self._size_limit *= 16
 
 
-        self._res_ids = []
-        result = cursor.execute('SELECT rid FROM user_resource WHERE uid=?',
-                                (self._uid,))
-        for row in result:
-            self._res_ids.append(row[0])
+            self._res_ids = []
+            result = cursor.execute('SELECT rid FROM user_resource WHERE uid=?',
+                                    (self._uid,))
+            for row in result:
+                self._res_ids.append(row[0])
 
-        self._stat_start = 0
-        self._nr_headlines = []
-        self._size_headlines = []
-        self._unknown_msgs = 0
+            self._stat_start = 0
+            self._nr_headlines = []
+            self._size_headlines = []
+            self._unknown_msgs = 0
 
-        result = cursor.execute('SELECT start, nr_msgs0, nr_msgs1, nr_msgs2, nr_msgs3, nr_msgs4, nr_msgs5, nr_msgs6, nr_msgs7, size_msgs0, size_msgs1, size_msgs2, size_msgs3, size_msgs4, size_msgs5, size_msgs6, size_msgs7 FROM user_stat WHERE uid=?',
-                       (self._uid,))
-        for row in result:
-            self._stat_start = row[0]
-            self._nr_headlines = list(row[1:9])
-            self._size_headlines = list(row[9:17])
+            result = cursor.execute('SELECT start, nr_msgs0, nr_msgs1, nr_msgs2, nr_msgs3, nr_msgs4, nr_msgs5, nr_msgs6, nr_msgs7, size_msgs0, size_msgs1, size_msgs2, size_msgs3, size_msgs4, size_msgs5, size_msgs6, size_msgs7 FROM user_stat WHERE uid=?',
+                           (self._uid,))
+            for row in result:
+                self._stat_start = row[0]
+                self._nr_headlines = list(row[1:9])
+                self._size_headlines = list(row[9:17])
 
-        del cursor
         self._adjust_statistics()
 
 
@@ -544,15 +550,9 @@ class JabberUser:
             self._size_headlines += (8 - len(self._size_headlines)) * [0]
 
     def _commit_statistics(self, db_cursor=None):
-        if db_cursor == None:
-            cursor = Cursor(db)
-        else:
-            cursor = db_cursor
-
-        cursor.execute('INSERT INTO user_stat (uid, start, nr_msgs0, nr_msgs1, nr_msgs2, nr_msgs3, nr_msgs4, nr_msgs5, nr_msgs6, nr_msgs7, size_msgs0, size_msgs1, size_msgs2, size_msgs3, size_msgs4, size_msgs5, size_msgs6, size_msgs7) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                       tuple([self._uid, self._stat_start] + self._nr_headlines + self._size_headlines))
-
-        del cursor
+        with Cursor(db, db_cursor) as cursor:
+            cursor.execute('INSERT INTO user_stat (uid, start, nr_msgs0, nr_msgs1, nr_msgs2, nr_msgs3, nr_msgs4, nr_msgs5, nr_msgs6, nr_msgs7, size_msgs0, size_msgs1, size_msgs2, size_msgs3, size_msgs4, size_msgs5, size_msgs6, size_msgs7) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                           tuple([self._uid, self._stat_start] + self._nr_headlines + self._size_headlines))
 
 
     def uid(self):
@@ -628,10 +628,9 @@ class JabberUser:
         
 
     def _update_configuration(self):
-        cursor = Cursor(db)
-        cursor.execute('UPDATE user SET conf=?, store_messages=?, size_limit=? WHERE uid=?',
-                       (self._configuration, self._store_messages, self._size_limit // 16, self._uid))
-        del cursor
+        with Cursor(db) as cursor:
+            cursor.execute('UPDATE user SET conf=?, store_messages=?, size_limit=? WHERE uid=?',
+                           (self._configuration, self._store_messages, self._size_limit // 16, self._uid))
 
     def set_configuration(self, conf, store_messages, size_limit):
         self._configuration = conf
@@ -703,21 +702,13 @@ class JabberUser:
             self._res_ids.append(res_id)
 
             # also update storage res->uid mapping
-            resources_unlocker = storage.resources_lock()
-            try:
+            with storage.resources_sync():
                 res_uids = storage.get_resource_uids(resource, db_cursor)
                 res_uids.append(self.uid())
-            finally:
-                del resources_unlocker
 
-            if db_cursor == None:
-                cursor = Cursor(db)
-            else:
-                cursor = db_cursor
-
-            cursor.execute('INSERT INTO user_resource (uid, rid, seq_nr) VALUES (?, ?, ?)',
-                           (self._uid, res_id, seq_nr))
-            del cursor
+            with Cursor(db, db_cursor) as cursor:
+                cursor.execute('INSERT INTO user_resource (uid, rid, seq_nr) VALUES (?, ?, ?)',
+                               (self._uid, res_id, seq_nr))
         else:
             raise ValueError(res_id)
 
@@ -729,41 +720,28 @@ class JabberUser:
         self._res_ids.remove(res_id)
 
         # also update storage res->uid mapping
-        resources_unlocker = storage.resources_lock()
-        try:
+        with storage.resources_sync():
             res_uids = storage.get_resource_uids(resource)
             try:
                 res_uids.remove(self.uid())
             except ValueError:
                 pass
-        finally:
-            del resources_unlocker
 
         if len(res_uids) == 0:
             storage.evict_resource(resource)
 
-        if db_cursor == None:
-            cursor = Cursor(db)
-        else:
-            cursor = db_cursor
-
-        cursor.execute('DELETE FROM user_resource WHERE uid=? AND rid=?',
-                       (self._uid, res_id))
-        del cursor
+        with Cursor(db, db_cursor) as cursor:
+            cursor.execute('DELETE FROM user_resource WHERE uid=? AND rid=?',
+                           (self._uid, res_id))
 
     def headline_id(self, resource, db_cursor=None):
-        if db_cursor == None:
-            cursor = Cursor(db)
-        else:
-            cursor = db_cursor
+        with Cursor(db, db_cursor) as cursor:
+            result = cursor.execute('SELECT seq_nr FROM user_resource WHERE uid=? AND rid=?',
+                                    (self._uid, resource.id()))
 
-        result = cursor.execute('SELECT seq_nr FROM user_resource WHERE uid=? AND rid=?',
-                                (self._uid, resource.id()))
-
-        headline_id = None
-        for row in result:
-            headline_id = row[0]
-        del cursor
+            headline_id = None
+            for row in result:
+                headline_id = row[0]
 
         if headline_id == None:
             headline_id = 0
@@ -773,13 +751,7 @@ class JabberUser:
 
     def update_headline(self, resource, headline_id, new_items=[],
                         db_cursor=None):
-        if db_cursor == None:
-            cursor = Cursor(db)
-            cursor.begin()
-        else:
-            cursor = db_cursor
-
-        try:
+        with Cursor(db, db_cursor) as cursor:
             cursor.execute('UPDATE user_resource SET seq_nr=? WHERE uid=? AND rid=?',
                            (headline_id, self._uid, resource.id()))
 
@@ -792,9 +764,6 @@ class JabberUser:
                                     [0] + new_items)
                 self._size_headlines[-1] += items_size
                 self._commit_statistics(cursor)
-
-        finally:
-            del cursor
 
 
 class DummyJabberUser(JabberUser):
@@ -841,12 +810,9 @@ class DummyJabberUser(JabberUser):
             self._res_ids.append(res_id)
 
             # also update storage res->uid mapping
-            resources_unlocker = storage.resources_lock()
-            try:
+            with storage.resources_sync():
                 res_uids = storage.get_resource_uids(resource, db_cursor)
                 res_uids.append(self.uid())
-            finally:
-                del resources_unlocker
         else:
             raise ValueError(res_id)
 
@@ -862,15 +828,12 @@ class DummyJabberUser(JabberUser):
         self._res_ids.remove(res_id)
 
         # also update storage res->uid mapping
-        resources_unlocker = storage.resources_lock()
-        try:
+        with storage.resources_sync():
             res_uids = storage.get_resource_uids(resource, db_cursor)
             try:
                 res_uids.remove(self.uid())
             except ValueError:
                 pass
-        finally:
-            del resources_unlocker
 
         if len(res_uids) == 0:
             storage.evict_resource(resource)
@@ -1202,13 +1165,10 @@ class JabRSSStream(XmppStream):
             presence = Stanza.Presence()
 
             total_users, total_resources = 0, 0
-            cursor = Cursor(db)
-            try:
+            with Cursor(db) as cursor:
                 result = cursor.execute('SELECT (SELECT COUNT(uid) FROM user), (SELECT COUNT(DISTINCT rid) FROM user_resource)')
                 for total_users, total_resources in result:
                     pass
-            finally:
-                del cursor
 
             presence.set_status('%d/%d users, %d/%d feeds' %
                                 (len(storage._users) // 2,
@@ -1390,13 +1350,10 @@ class JabRSSStream(XmppStream):
     def _process_statistics(self, stanza, user):
         reply_body = ['Statistics:']
         total_users, total_resources = 0, 0
-        cursor = Cursor(db)
-        try:
+        with Cursor(db) as cursor:
             result = cursor.execute('SELECT (SELECT COUNT(uid) FROM user), (SELECT COUNT(DISTINCT rid) FROM user_resource)')
             for total_users, total_resources in result:
                 pass
-        finally:
-            del cursor
 
         reply_body.append('Users online/total: %d/%d' %
                           (len(storage._users) // 2, total_users))
@@ -1819,18 +1776,16 @@ class JabRSSStream(XmppStream):
                     self._unsubscribe_user(jid)
                     self._remove_user(jid)
 
-            cursor = Cursor(db)
-            result = cursor.execute('SELECT jid, uid FROM user')
-            delete_users = []
-            for username, uid in result:
-                if username.find('/') != -1:
-                    storage.remove_user(uid)
-                elif not subscribers.has_key(username):
-                    delete_users.append(username)
-                else:
-                    subscribers[username] = False
-
-            del cursor
+            with Cursor(db) as cursor:
+                result = cursor.execute('SELECT jid, uid FROM user')
+                delete_users = []
+                for username, uid in result:
+                    if username.find('/') != -1:
+                        storage.remove_user(uid)
+                    elif not subscribers.has_key(username):
+                        delete_users.append(username)
+                    else:
+                        subscribers[username] = False
 
             for username in delete_users:
                 log_message('user "%s" in database, but not subscribed to the service' % (username,))
@@ -1844,25 +1799,20 @@ class JabRSSStream(XmppStream):
             subscribers = map(lambda x: x[0], subscribers)
             week_nr = get_week_nr()
 
-            cursor = Cursor(db)
+            with Cursor(db) as cursor:
+                for username in subscribers:
+                    try:
+                        cursor.execute('INSERT INTO user (jid, conf, store_messages, size_limit, since) VALUES (?, ?, ?, ?, ?)',
+                                       (username, 0, 16, None, week_nr))
+                    except:
+                        pass
 
-            for username in subscribers:
-                try:
-                    cursor.execute('INSERT INTO user (jid, conf, store_messages, size_limit, since) VALUES (?, ?, ?, ?, ?)',
-                                   (username, 0, 16, None, week_nr))
-                except:
-                    pass
-
-            del cursor
-
-            cursor = Cursor(db)
-            result = cursor.execute('SELECT jid FROM user LEFT OUTER JOIN user_stat ON (user.uid=user_stat.uid) WHERE since < ? AND (start < ? OR start IS NULL)',
-                                    (week_nr - 3, week_nr - 32))
-            delete_users = []
-            for row in result:
-                delete_users.append(row[0])
-
-            del cursor
+            with Cursor(db) as cursor:
+                result = cursor.execute('SELECT jid FROM user LEFT OUTER JOIN user_stat ON (user.uid=user_stat.uid) WHERE since < ? AND (start < ? OR start IS NULL)',
+                                        (week_nr - 3, week_nr - 32))
+                delete_users = []
+                for row in result:
+                    delete_users.append(row[0])
 
             for username in delete_users:
                 log_message('user "%s" hasn\'t used the service for more than 40 weeks' % (username,))
@@ -2047,157 +1997,134 @@ class JabRSSStream(XmppStream):
         if redirect_url != None:
             return
 
-        cursor = None
-        users_unlocker = None
-        redirect_resource = None
-        redirect_unlock = False
         redirects = []
 
-        resource.lock(); need_unlock = True
-        try:
-            cursor = Cursor(db)
-            uids = storage.get_resource_uids(resource, cursor)
-            cursor = None
+        with FlexibleLocker(None) as redirlock:
+            with FlexibleLocker(resource.sync()) as reslock:
+                with Cursor(db) as cursor:
+                    uids = storage.get_resource_uids(resource, cursor)
+                    cursor.commit()
 
-            users_unlocker = storage.users_lock()
-            used = False
-            for uid in uids:
-                try:
-                    user = storage.get_user_by_id(uid)
-                    used = True
-                except KeyError:
-                    pass
-
-            if not used:
-                storage.evict_resource(resource)
-
-            users_unlocker = None
-
-            if used:
-                resource.unlock(); need_unlock = False
-                try:
-                    log_message(time.asctime(), 'updating', resource.url())
-                    new_items, next_item_id, redirect_resource, redirect_seq, redirects = resource.update(res_db, redirect_cb = storage._redirect_cb)
-
-                    if len(new_items) > 0:
-                        need_unlock = True
-                    elif redirect_resource != None:
-                        resource.lock(); need_unlock = True
-
-                    if redirect_resource != None:
-                        redirect_resource.lock(); redirect_unlock = True
-
-                    if len(new_items) > 0 or redirect_resource != None:
-                        deliver_users = []
-                        cursor = Cursor(db)
-                        uids = storage.get_resource_uids(resource, cursor)
-                        cursor.begin()
+                    used = False
+                    with storage.users_sync():
                         for uid in uids:
                             try:
                                 user = storage.get_user_by_id(uid)
-
-                                if redirect_resource != None:
-                                    try:
-                                        user.add_resource(redirect_resource,
-                                                          redirect_seq,
-                                                          cursor)
-                                    except ValueError:
-                                        pass
-                                    try:
-                                        dummy_user.remove_resource(redirect_resource, cursor)
-                                    except ValueError:
-                                        pass
-
-
-                                if len(new_items) and user.get_delivery_state():
-                                    if redirect_resource == None:
-                                        user.update_headline(resource,
-                                                             next_item_id,
-                                                             new_items, cursor)
-                                    else:
-                                        try:
-                                            user.remove_resource(resource,
-                                                                 cursor)
-                                        except ValueError:
-                                            pass
-
-                                    deliver_users.append(user)
-
-                                elif len(new_items) == 0:
-                                    try:
-                                        user.remove_resource(resource, cursor)
-                                    except ValueError:
-                                        pass
-
+                                used = True
                             except KeyError:
-                                # just means that the user is no longer online
                                 pass
 
-                        # we need to unlock the resource here to
-                        # prevent deadlock (the main thread, which is
-                        # needed for sending, might be blocked waiting
-                        # to acquire resource)
-                        cursor = None
-                        if need_unlock:
-                            resource.unlock(); need_unlock = False
+                        if not used:
+                            storage.evict_resource(resource)
 
-                        if redirect_unlock:
-                            redirect_resource.unlock(); redirect_unlock = False
+                    if used:
+                        reslock.unlock()
+                        try:
+                            log_message(time.asctime(), 'updating', resource.url())
+                            new_items, next_item_id, redirect_resource, redirect_seq, redirects = resource.update(res_db, redirect_cb = storage._redirect_cb)
 
-                        for user in deliver_users:
-                            self._send_headlines(user, resource, new_items,
-                                                 True)
-                except:
-                    log_message('exception caught updating', resource.url())
-                    traceback.print_exc(file=sys.stdout)
+                            if len(new_items) > 0:
+                                reslock.locked()
+                            elif redirect_resource != None:
+                                reslock.lock()
 
-                if need_unlock:
-                    resource.unlock(); need_unlock = False
-                if redirect_unlock:
-                    redirect_resource.unlock(); redirect_unlock = False
-                if redirect_resource == None:
-                    self.schedule_update(resource)
-        finally:
-	    del cursor
-            del users_unlocker
-            if need_unlock:
-                resource.unlock(); need_unlock = False
+                            if redirect_resource != None:
+                                redirlock.replace(redirect_resource.sync())
+
+                            if len(new_items) > 0 or redirect_resource != None:
+                                deliver_users = []
+                                uids = storage.get_resource_uids(resource, cursor)
+                                cursor.begin()
+                                for uid in uids:
+                                    try:
+                                        user = storage.get_user_by_id(uid)
+
+                                        if redirect_resource != None:
+                                            try:
+                                                user.add_resource(redirect_resource,
+                                                                  redirect_seq,
+                                                                  cursor)
+                                            except ValueError:
+                                                pass
+                                            try:
+                                                dummy_user.remove_resource(redirect_resource, cursor)
+                                            except ValueError:
+                                                pass
+
+
+                                        if len(new_items) and user.get_delivery_state():
+                                            if redirect_resource == None:
+                                                user.update_headline(resource,
+                                                                     next_item_id,
+                                                                     new_items, cursor)
+                                            else:
+                                                try:
+                                                    user.remove_resource(resource,
+                                                                         cursor)
+                                                except ValueError:
+                                                    pass
+
+                                            deliver_users.append(user)
+
+                                        elif len(new_items) == 0:
+                                            try:
+                                                user.remove_resource(resource, cursor)
+                                            except ValueError:
+                                                pass
+
+                                    except KeyError:
+                                        # just means that the user is no longer online
+                                        pass
+
+                                # we need to unlock the resource here to
+                                # prevent deadlock (the main thread, which is
+                                # needed for sending, might be blocked waiting
+                                # to acquire resource)
+                                cursor.commit()
+                                reslock.unlock()
+                                redirlock.unlock()
+
+                                for user in deliver_users:
+                                    self._send_headlines(user, resource, new_items,
+                                                         True)
+                        except:
+                            log_message('exception caught updating', resource.url())
+                            traceback.print_exc(file=sys.stdout)
+
+                        redirlock.unlock()
+                        if redirect_resource == None:
+                            self.schedule_update(resource)
 
         for resource, new_items, next_item_id in redirects:
             deliver_users = []
 
             # remember to always lock the resource first
-            resource.lock(); need_unlock = True
-            cursor = Cursor(db)
-            cursor.begin()
-            try:
-                log_message('processing updated resource', resource.url())
-                try:
-                    dummy_user.remove_resource(resource, cursor)
-                except ValueError:
-                    pass
+            with resource.sync():
+                with Cursor(db) as cursor:
+                    cursor.begin()
 
-                uids = storage.get_resource_uids(resource, cursor)
-                for uid in uids:
+                    log_message('processing updated resource', resource.url())
                     try:
-                        user = storage.get_user_by_id(uid)
-
-                        if user.get_delivery_state():
-                            headline_id = user.headline_id(resource, cursor)
-                            if headline_id < next_item_id:
-                                user.update_headline(resource,
-                                                     next_item_id,
-                                                     new_items, cursor)
-
-                                deliver_users.append(user)
-                    except KeyError:
-                        # just means that the user is no longer online
+                        dummy_user.remove_resource(resource, cursor)
+                    except ValueError:
                         pass
 
-            finally:
-                del cursor
-                if need_unlock:
-                    resource.unlock(); need_unlock = False
+                    uids = storage.get_resource_uids(resource, cursor)
+                    for uid in uids:
+                        try:
+                            user = storage.get_user_by_id(uid)
+
+                            if user.get_delivery_state():
+                                headline_id = user.headline_id(resource, cursor)
+                                if headline_id < next_item_id:
+                                    user.update_headline(resource,
+                                                         next_item_id,
+                                                         new_items, cursor)
+
+                                    deliver_users.append(user)
+                        except KeyError:
+                            # just means that the user is no longer online
+                            pass
 
             for user in deliver_users:
                 self._send_headlines(user, resource, new_items, True)
@@ -2215,11 +2142,10 @@ def console_handler(bot):
                 pass
             elif s == 'debug locks':
                 # show all locked objects
-                log_message('db_sync', db_sync.locked())
-                log_message('storage._users_sync', storage._users_sync.locked())
-                log_message('storage._resources_sync', storage._resources_sync.locked())
-
-                log_message('RSS_Resource._db_sync', RSS_Resource._db_sync.locked())
+                log_message('db_sync', db_sync.locked(),
+                            'users_sync', storage._users_sync.locked(),
+                            'resources_sync', storage._resources_sync.locked(),
+                            'RSS_Resource._db_sync', RSS_Resource._db_sync.locked())
                 for res in storage._resources.values():
                     if res._lock.locked():
                         log_message('resource %s' % (res._url,))
@@ -2246,13 +2172,10 @@ def console_handler(bot):
                     log_message('user not online')
             elif s == 'statistics':
                 total_users, total_resources = 0, 0
-                cursor = Cursor(db)
-                try:
+                with Cursor(db) as cursor:
                     result = cursor.execute('SELECT (SELECT COUNT(uid) FROM user), (SELECT COUNT(DISTINCT rid) FROM user_resource)')
                     for total_users, total_resources in result:
                         pass
-                finally:
-                    del cursor
 
                 log_message('Users online/total: %d/%d' %
                             (len(storage._users) // 2, total_users))
@@ -2288,8 +2211,7 @@ logger.addHandler(logging.StreamHandler())
 #logger.setLevel(logging.DEBUG)
 logger.setLevel(logging.INFO)
 
-bot = JabRSSStream(JID('%s@%s/%s' % (JABBER_USER, JABBER_SERVER, 'JabRSS')),
-                   JABBER_HOST, JABBER_PASSWORD)
+bot = JabRSSStream(JABRSS_JID, JABRSS_HOST, JABRSS_PASSWORD)
 thread.start_new_thread(bot.run, ())
 thread.start_new_thread(console_handler, (bot,))
 

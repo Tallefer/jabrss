@@ -1,4 +1,6 @@
 #!/usr/bin/python
+from __future__ import with_statement
+
 import ssl, socket, threading
 
 from getpass import getpass
@@ -43,42 +45,30 @@ class EchoBot(XmppStream):
 
 
     def sock(self):
-        self._io_sync.acquire()
-        try:
+        with self._io_sync:
             return self._sock
-        finally:
-            self._io_sync.release()
 
     def send(self, data):
-        self._io_sync.acquire()
-        try:
+        with self._io_sync:
             if self._sock != None:
                 try:
                     self._sock.sendall(data)
                 except socket.error:
                     self._stream_closed()
                     raise
-        finally:
-            self._io_sync.release()
 
     def closed(self):
-        self._io_sync.acquire()
-        try:
+        with self._io_sync:
             self._stream_closed()
-        finally:
-            self._io_sync.release()
 
     def shutdown(self):
-        self._io_sync.acquire()
-        try:
+        with self._io_sync:
             sock = self._stream_closed()
             if sock != None:
                 try:
                     sock.shutdown(socket.SHUT_WR)
                 except socket.error:
                     pass
-        finally:
-            self._io_sync.release()
 
     def wait(self):
         self._closed.wait()

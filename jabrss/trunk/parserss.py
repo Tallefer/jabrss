@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (C) 2001-2010, Christof Meerwald
+# Copyright (C) 2001-2011, Christof Meerwald
 # http://jabrss.cmeerw.org
 
 # This program is free software; you can redistribute it and/or modify
@@ -15,6 +15,8 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
+
+from __future__ import with_statement
 
 import codecs, hashlib, logging, random, re, socket, string, struct
 import sys, time, threading, traceback, zlib
@@ -285,47 +287,48 @@ def compare_items(l, r):
 
 
 class Cursor:
-    def __init__(self, _db):
-        self._txn = False
-        self._locked = False
-        self._cursor = _db.cursor()
+    def __init__(self, dbconn, parent=None):
+        self._txn, self._locked = False, False
+        self._parent = parent
+        if self._parent == None:
+            if not hasattr(dbconn, 'cursor'):
+                self._cursor = dbconn().cursor()
+            else:
+                self._cursor = dbconn.cursor()
+        else:
+            self._cursor = None
 
-        self._locked = True
-        RSS_Resource._db_sync.acquire()
+    def __enter__(self):
+        if self._parent == None:
+            return self
+        else:
+            return self._parent
 
-    def __del__(self):
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._parent == None:
+            self.commit()
+
+    def commit(self):
         try:
             if self._txn:
                 self._cursor.execute('COMMIT')
-                pass
+                self._txn = False
         finally:
             if self._locked:
                 RSS_Resource._db_sync.release()
+                self._locked = False
 
-
-    def unlock(self):
-        if self._txn:
-            self._cursor.execute('COMMIT')
-            self._txn = False
-
-        if self._locked:
-            RSS_Resource._db_sync.release()
-            self._locked = False
-
-    def lock(self):
+    def begin(self):
         if not self._locked:
             RSS_Resource._db_sync.acquire()
             self._locked = True
-
-    def begin(self):
-        self.lock()
 
         if not self._txn:
             self._cursor.execute('BEGIN')
             self._txn = True
 
     def execute(self, stmt, bindings=None):
-        self.lock()
+        self.begin()
 
         if bindings == None:
             return self._cursor.execute(stmt)
@@ -1206,44 +1209,45 @@ class RSS_Resource:
             db = RSS_Resource_db()
         else:
             db = res_db
-        cursor = Cursor(db)
 
-        result = cursor.execute('SELECT rid, last_updated, last_modified, etag, invalid_since, redirect, redirect_seq, penalty, err_info, title, description, link FROM resource WHERE url=?',
-                                (self._url,))
-        for row in result:
-            self._id, self._last_updated, self._last_modified, self._etag, self._invalid_since, self._redirect, self._redirect_seq, self._penalty, self._err_info, title, description, link = row
+        with Cursor(db) as cursor:
+            result = cursor.execute('SELECT rid, last_updated, last_modified, etag, invalid_since, redirect, redirect_seq, penalty, err_info, title, description, link FROM resource WHERE url=?',
+                                    (self._url,))
+            for row in result:
+                self._id, self._last_updated, self._last_modified, self._etag, self._invalid_since, self._redirect, self._redirect_seq, self._penalty, self._err_info, title, description, link = row
 
-        if self._id == None:
-            cursor.execute('INSERT INTO resource (url) VALUES (?)',
-                           (self._url,))
-            self._id = cursor.lastrowid
+            if self._id == None:
+                cursor.execute('INSERT INTO resource (url) VALUES (?)',
+                               (self._url,))
+                self._id = cursor.lastrowid
 
-        if self._last_updated == None:
-            self._last_updated = 0
+            if self._last_updated == None:
+                self._last_updated = 0
 
-        if self._penalty == None:
-            self._penalty = 0
+            if self._penalty == None:
+                self._penalty = 0
 
-        if title == None:
-            title = self._url
-        if link == None:
-            link = ''
-        if description == None:
-            description = ''
+            if title == None:
+                title = self._url
+            if link == None:
+                link = ''
+            if description == None:
+                description = ''
 
-        self._channel_info = Data(title=title, link=link, descr=description)
+            self._channel_info = Data(title=title, link=link, descr=description)
 
-        self._history = []
-        result = cursor.execute('SELECT time_items0, time_items1, time_items2, time_items3, time_items4, time_items5, time_items6, time_items7, time_items8, time_items9, time_items10, time_items11, time_items12, time_items13, time_items14, time_items15, nr_items0, nr_items1, nr_items2, nr_items3, nr_items4, nr_items5, nr_items6, nr_items7, nr_items8, nr_items9, nr_items10, nr_items11, nr_items12, nr_items13, nr_items14, nr_items15 FROM resource_history WHERE rid=?',
-                       (self._id,))
-        for row in result:
-            history_times = filter(lambda x: x!=None, row[0:16])
-            history_nr = filter(lambda x: x!=None, row[16:32])
-            self._history = zip(history_times, history_nr)
-
-        del cursor
+            self._history = []
+            result = cursor.execute('SELECT time_items0, time_items1, time_items2, time_items3, time_items4, time_items5, time_items6, time_items7, time_items8, time_items9, time_items10, time_items11, time_items12, time_items13, time_items14, time_items15, nr_items0, nr_items1, nr_items2, nr_items3, nr_items4, nr_items5, nr_items6, nr_items7, nr_items8, nr_items9, nr_items10, nr_items11, nr_items12, nr_items13, nr_items14, nr_items15 FROM resource_history WHERE rid=?',
+                           (self._id,))
+            for row in result:
+                history_times = filter(lambda x: x!=None, row[0:16])
+                history_nr = filter(lambda x: x!=None, row[16:32])
+                self._history = zip(history_times, history_nr)
         del db
 
+
+    def sync(self):
+        return self._lock
 
     def lock(self):
         self._lock.acquire()
@@ -1276,15 +1280,14 @@ class RSS_Resource:
             db = RSS_Resource_db()
         else:
             db = res_db
-        cursor = Cursor(db)
 
-        result = cursor.execute('SELECT url FROM resource WHERE rid=?',
-                                (self._redirect,))
-        redirect_url = None
-        for row in result:
-            redirect_url = row[0]
+        with Cursor(db) as cursor:
+            result = cursor.execute('SELECT url FROM resource WHERE rid=?',
+                                    (self._redirect,))
+            redirect_url = None
+            for row in result:
+                redirect_url = row[0]
 
-        del cursor
         return redirect_url, self._redirect_seq
 
     def penalty(self):
@@ -1300,7 +1303,7 @@ class RSS_Resource:
 
     # @return ([item], next_item_id, redirect_resource, redirect_seq, [redirects])
     # locks the resource object if new_items are returned
-    def update(self, db=None, redirect_count=5, redirect_cb=None):
+    def update(self, db=RSS_Resource_db, redirect_count=5, redirect_cb=None):
         now = int(time.time())
 
         # sanity check update interval
@@ -1322,11 +1325,6 @@ class RSS_Resource:
             self._invalid_since = now
 
 
-        if db == None:
-            db = RSS_Resource_db()
-
-        cursor = None
-
         redirect_penalty = 0
         redirect_tries = redirect_count
         redirect_permanent = True
@@ -1338,289 +1336,280 @@ class RSS_Resource:
         http_protocol = None
         http_host = None
 
-        try:
-            url_protocol, url_host, url_path = self._url_protocol, self._url_host, self._url_path
+        with Cursor(db) as cursor:
+            try:
+                url_protocol, url_host, url_path = self._url_protocol, self._url_host, self._url_path
 
-            while redirect_tries > 0:
-                redirect_tries = -(redirect_tries - 1)
+                while redirect_tries > 0:
+                    redirect_tries = -(redirect_tries - 1)
 
-                if redirect_permanent:
-                    redirect_url = url_protocol + '://' + url_host + url_path
-                    if redirect_url != self._url:
-                        #log_message('redirect: %s -> %s' % (self._url.encode('iso8859-1', 'replace'), redirect_url.encode('iso8859-1', 'replace')))
-                        if redirect_cb != None:
-                            redirect_resource, redirects = redirect_cb(redirect_url, db, -redirect_tries + 1)
+                    if redirect_permanent:
+                        redirect_url = url_protocol + '://' + url_host + url_path
+                        if redirect_url != self._url:
+                            #log_message('redirect: %s -> %s' % (self._url.encode('iso8859-1', 'replace'), redirect_url.encode('iso8859-1', 'replace')))
+                            if redirect_cb != None:
+                                redirect_resource, redirects = redirect_cb(redirect_url, db, -redirect_tries + 1)
 
-                            # only perform the redirect if target is valid
-                            if redirect_resource._invalid_since:
-                                error_info = redirect_resource._err_info
-                                self._last_modified = redirect_resource._last_modified
-                                self._etag = redirect_resource._etag
-                                redirect_resource = None
-                            else:
-                                cursor = Cursor(db)
-                                redirect_items, redirect_seq = redirect_resource.get_headlines(0, cursor)
+                                # only perform the redirect if target is valid
+                                if redirect_resource._invalid_since:
+                                    error_info = redirect_resource._err_info
+                                    self._last_modified = redirect_resource._last_modified
+                                    self._etag = redirect_resource._etag
+                                    redirect_resource = None
+                                else:
+                                    redirect_items, redirect_seq = redirect_resource.get_headlines(0, cursor)
 
-                                items, first_item_id, nr_new_items = self._process_new_items(redirect_items, cursor)
-                                del redirect_items
+                                    items, first_item_id, nr_new_items = self._process_new_items(redirect_items, cursor)
+                                    del redirect_items
 
-                                self._last_modified = None
-                                self._etag = None
+                                    self._last_modified = None
+                                    self._etag = None
 
-                                self._redirect = redirect_resource._id
-                                self._redirect_seq = redirect_seq
-                                cursor.begin()
-                                cursor.execute('UPDATE resource SET redirect=?, redirect_seq=? WHERE rid=?',
-                                               (self._redirect,
-                                                self._redirect_seq, self._id))
+                                    self._redirect = redirect_resource._id
+                                    self._redirect_seq = redirect_seq
+                                    cursor.execute('UPDATE resource SET redirect=?, redirect_seq=? WHERE rid=?',
+                                                   (self._redirect,
+                                                    self._redirect_seq, self._id))
 
-                            break
+                                break
 
 
-                if RSS_Resource.http_proxy and (url_protocol == 'http'):
-                    host = RSS_Resource.http_proxy
-                    request = 'http://' + url_host + url_path
-                else:
-                    host = url_host
-                    request = url_path
-
-                if url_protocol == 'http' and http_protocol == url_protocol and http_host == host and http_conn != None:
-                    conn_reused = True
-                    h = http_conn
-                else:
-                    conn_reused = False
-                    if url_protocol == 'https':
-                        h = HTTPSConnection(host,
-                                            timeout=self._connect_timeout,
-                                            read_timeout=self._timeout)
+                    if RSS_Resource.http_proxy and (url_protocol == 'http'):
+                        host = RSS_Resource.http_proxy
+                        request = 'http://' + url_host + url_path
                     else:
-                        h = HTTPConnection(host,
-                                           timeout=self._connect_timeout,
-                                           read_timeout=self._timeout)
+                        host = url_host
+                        request = url_path
 
-                http_protocol = url_protocol
-                http_host = host
-                http_conn = None
-                try:
-                    h.putrequest('GET', request)
+                    if url_protocol == 'http' and http_protocol == url_protocol and http_host == host and http_conn != None:
+                        conn_reused = True
+                        h = http_conn
+                    else:
+                        conn_reused = False
+                        if url_protocol == 'https':
+                            h = HTTPSConnection(host,
+                                                timeout=self._connect_timeout,
+                                                read_timeout=self._timeout)
+                        else:
+                            h = HTTPConnection(host,
+                                               timeout=self._connect_timeout,
+                                               read_timeout=self._timeout)
 
-                    if conn_reused:
-                        logger.debug('reused HTTP connection')
-                except httplib.CannotSendRequest:
-                    logger.warn('caught CannotSendRequest, opening new connection')
-
-                    if not conn_reused:
-                        raise
-
-                    h = HTTPConnection(host)
-                    h.putrequest('GET', request)
-
-                if not RSS_Resource.http_proxy:
-                    h.putheader('Host', url_host)
-                h.putheader('Connection', 'Keep-Alive')
-                h.putheader('Pragma', 'no-cache')
-                h.putheader('Cache-Control', 'no-cache')
-                h.putheader('Accept-Encoding', 'gzip, deflate, identity')
-                h.putheader('User-Agent', 'JabRSS (http://jabrss.cmeerw.org)')
-                if self._last_modified:
-                    h.putheader('If-Modified-Since',
-                                formatdate(self._last_modified))
-                if self._etag != None:
-                    h.putheader('If-None-Match', self._etag)
-                h.endheaders()
-                response = h.getresponse()
-
-                errcode = response.status
-                errmsg = response.reason
-                headers = response.msg
-
-                # check the error code
-                # handle "304 Not Modified"
-                if errcode == 304 or errcode == 412:
-                    # RSS resource is valid
-                    self._invalid_since = None
-                elif (errcode >= 200) and (errcode < 300):
-                    feed_xml_downloaded = True
-
-                    self._last_modified = parse_Rfc822DateTime(headers.get('last-modified', None))
-
+                    http_protocol = url_protocol
+                    http_host = host
+                    http_conn = None
                     try:
-                        self._etag = headers['etag']
-                    except:
-                        self._etag = None
+                        h.putrequest('GET', request)
 
-                    content_encoding = headers.get('content-encoding', None)
-                    transfer_encoding = headers.get('transfer-encoding', None)
+                        if conn_reused:
+                            logger.debug('reused HTTP connection')
+                    except httplib.CannotSendRequest:
+                        logger.warn('caught CannotSendRequest, opening new connection')
 
-                    if (content_encoding == 'gzip') or (transfer_encoding == 'gzip'):
-                        logger.debug('gzip-encoded data')
-                        decoder = Gzip_Decompressor()
-                    elif (content_encoding == 'deflate') or (transfer_encoding == 'deflate'):
-                        logger.debug('deflate-encoded data')
-                        decoder = Deflate_Decompressor()
-                    else:
-                        decoder = Null_Decompressor()
+                        if not conn_reused:
+                            raise
 
-                    rss_parser = Feed_Parser((self._url_protocol, self._url_host, self._url_path))
+                        h = HTTPConnection(host)
+                        h.putrequest('GET', request)
 
-                    bytes_received = 0
-                    bytes_processed = 0
-                    xml_started = False
-                    file_hash = hashlib.md5()
+                    if not RSS_Resource.http_proxy:
+                        h.putheader('Host', url_host)
+                    h.putheader('Connection', 'Keep-Alive')
+                    h.putheader('Pragma', 'no-cache')
+                    h.putheader('Cache-Control', 'no-cache')
+                    h.putheader('Accept-Encoding', 'gzip, deflate, identity')
+                    h.putheader('User-Agent', 'JabRSS (http://jabrss.cmeerw.org)')
+                    if self._last_modified:
+                        h.putheader('If-Modified-Since',
+                                    formatdate(self._last_modified))
+                    if self._etag != None:
+                        h.putheader('If-None-Match', self._etag)
+                    h.endheaders()
+                    response = h.getresponse()
 
-                    l = response.read(4096)
-                    while l:
-                        bytes_received = bytes_received + len(l)
-                        if bytes_received > 512 * 1024:
-                            raise ValueError('file exceeds maximum allowed size')
+                    errcode = response.status
+                    errmsg = response.reason
+                    headers = response.msg
 
-                        data = decoder.feed(l)
+                    # check the error code
+                    # handle "304 Not Modified"
+                    if errcode == 304 or errcode == 412:
+                        # RSS resource is valid
+                        self._invalid_since = None
+                    elif (errcode >= 200) and (errcode < 300):
+                        feed_xml_downloaded = True
+
+                        self._last_modified = parse_Rfc822DateTime(headers.get('last-modified', None))
+
+                        try:
+                            self._etag = headers['etag']
+                        except:
+                            self._etag = None
+
+                        content_encoding = headers.get('content-encoding', None)
+                        transfer_encoding = headers.get('transfer-encoding', None)
+
+                        if (content_encoding == 'gzip') or (transfer_encoding == 'gzip'):
+                            logger.debug('gzip-encoded data')
+                            decoder = Gzip_Decompressor()
+                        elif (content_encoding == 'deflate') or (transfer_encoding == 'deflate'):
+                            logger.debug('deflate-encoded data')
+                            decoder = Deflate_Decompressor()
+                        else:
+                            decoder = Null_Decompressor()
+
+                        rss_parser = Feed_Parser((self._url_protocol, self._url_host, self._url_path))
+
+                        bytes_received = 0
+                        bytes_processed = 0
+                        xml_started = False
+                        file_hash = hashlib.md5()
+
+                        l = response.read(4096)
+                        while l:
+                            bytes_received = bytes_received + len(l)
+                            if bytes_received > 512 * 1024:
+                                raise ValueError('file exceeds maximum allowed size')
+
+                            data = decoder.feed(l)
+                            file_hash.update(data)
+
+                            if not xml_started:
+                                data = data.lstrip()
+                                if data:
+                                    xml_started = True
+
+                            bytes_processed = bytes_processed + len(data)
+                            if bytes_processed > 1024 * 1024:
+                                raise ValueError('file exceeds maximum allowed decompressed size')
+
+                            rss_parser.feed(data)
+
+                            l = response.read(4096)
+
+                        response.close()
+                        h.close()
+                        data = decoder.flush()
                         file_hash.update(data)
-
-                        if not xml_started:
-                            data = data.lstrip()
-                            if data:
-                                xml_started = True
-
-                        bytes_processed = bytes_processed + len(data)
-                        if bytes_processed > 1024 * 1024:
-                            raise ValueError('file exceeds maximum allowed decompressed size')
-
                         rss_parser.feed(data)
+                        rss_parser.close()
 
+                        error_log = rss_parser.get_error_log()
+                        if error_log:
+                            logger.warn('XML parser error log:\n%s' % (error_log,))
+
+                        new_channel_info = normalize_obj(rss_parser.get_info())
+
+                        hash_buffer = buffer(file_hash.digest())
+                        cursor.execute('UPDATE resource SET hash=? WHERE rid=? AND (hash IS NULL OR hash<>?)',
+                                       (hash_buffer, self._id, hash_buffer))
+                        feed_xml_changed = (cursor.rowcount != 0)
+
+                        self._update_channel_info(new_channel_info, cursor)
+
+                        new_items = [ normalize_item(x) for x in rss_parser.get_items() ]
+                        new_items.reverse()
+
+                        items, first_item_id, nr_new_items = self._process_new_items(new_items, cursor)
+                        del new_items
+
+                    # handle "301 Moved Permanently", "302 Found" and
+                    # "307 Temporary Redirect"
+                    elif (errcode >= 300) and (errcode < 400):
+                        bytes_received = 0
                         l = response.read(4096)
+                        while l:
+                            bytes_received = bytes_received + len(l)
+                            if bytes_received > 128 * 1024:
+                                raise ValueError('file exceeds maximum allowed size')
 
-                    response.close()
-                    h.close()
-                    data = decoder.flush()
-                    file_hash.update(data)
-                    rss_parser.feed(data)
-                    rss_parser.close()
+                            l = response.read(4096)
 
-                    error_log = rss_parser.get_error_log()
-                    if error_log:
-                        logger.warn('XML parser error log:\n%s' % (error_log,))
+                        response.close()
+                        if not response.will_close:
+                            # maybe we can reuse the connection
+                            http_conn = h
 
-                    new_channel_info = normalize_obj(rss_parser.get_info())
+                        if errcode != 301:
+                            redirect_permanent = False
+                            redirect_penalty += 1
 
-                    cursor = Cursor(db)
-                    cursor.begin()
-
-                    hash_buffer = buffer(file_hash.digest())
-                    cursor.execute('UPDATE resource SET hash=? WHERE rid=? AND (hash IS NULL OR hash<>?)',
-                                   (hash_buffer, self._id, hash_buffer))
-                    feed_xml_changed = (cursor.rowcount != 0)
-
-                    self._update_channel_info(new_channel_info, cursor)
-
-                    new_items = [ normalize_item(x) for x in rss_parser.get_items() ]
-                    new_items.reverse()
-
-                    items, first_item_id, nr_new_items = self._process_new_items(new_items, cursor)
-                    del new_items
-
-                # handle "301 Moved Permanently", "302 Found" and
-                # "307 Temporary Redirect"
-                elif (errcode >= 300) and (errcode < 400):
-                    bytes_received = 0
-                    l = response.read(4096)
-                    while l:
-                        bytes_received = bytes_received + len(l)
-                        if bytes_received > 128 * 1024:
-                            raise ValueError('file exceeds maximum allowed size')
-
-                        l = response.read(4096)
-
-                    response.close()
-                    if not response.will_close:
-                        # maybe we can reuse the connection
-                        http_conn = h
-
-                    if errcode != 301:
-                        redirect_permanent = False
-                        redirect_penalty += 1
-
-                    redirect_url = headers.get('location', None)
-                    if redirect_url:
-                        base_url = '%s://%s/%s' % (url_protocol, url_host, url_path)
-                        redirect_url = urljoin(base_url, redirect_url)
-                        logger.info('Following redirect (%d) to "%s"' % (errcode, redirect_url))
-                        url_protocol, url_host, url_path = split_url(redirect_url)
-                        redirect_tries = -redirect_tries
+                        redirect_url = headers.get('location', None)
+                        if redirect_url:
+                            base_url = '%s://%s/%s' % (url_protocol, url_host, url_path)
+                            redirect_url = urljoin(base_url, redirect_url)
+                            logger.info('Following redirect (%d) to "%s"' % (errcode, redirect_url))
+                            url_protocol, url_host, url_path = split_url(redirect_url)
+                            redirect_tries = -redirect_tries
+                        else:
+                            logger.warn('%d %s %s' % (errcode, errmsg, str(headers)))
+                            error_info = 'HTTP: %d %s' % (errcode, errmsg)
                     else:
-                        logger.warn('%d %s %s' % (errcode, errmsg, str(headers)))
+                        logger.warn(('%d %s %s' % (errcode, errmsg, str(headers))))
                         error_info = 'HTTP: %d %s' % (errcode, errmsg)
+
+                if self._invalid_since and not error_info and redirect_tries == 0:
+                    error_info = 'redirect: maximum number of redirects exceeded'
+            except socket.timeout, e:
+                error_info = 'timeout: ' + str(e)
+            except socket.error, e:
+                error_info = 'socket: ' + str(e)
+            except IOError, e:
+                error_info = 'I/O error: ' + str(e)
+            except httplib.BadStatusLine, e:
+                error_info = 'HTTP: bad status line'
+            except httplib.IncompleteRead, e:
+                error_info = 'HTTP: incomplete read'
+            except httplib.UnknownProtocol, e:
+                error_info = 'HTTP: unknown protocol'
+            except httplib.HTTPException, e:
+                error_info = 'HTTP: ' + str(e)
+            except FeedError, e:
+                error_info = 'feed: ' + str(e)
+            except AssertionError, e:
+                error_info = 'assertion: ' + str(e)
+            except DecompressorError, e:
+                error_info = 'decompressor: ' + str(e)
+            except UnicodeError, e:
+                error_info = 'encoding: ' + str(e)
+            except LookupError, e:
+                error_info = 'encoding: ' + str(e)
+            except ValueError, e:
+                error_info = 'misc: ' + str(e)
+            except:
+                traceback.print_exc(file=sys.stdout)
+
+            if error_info:
+                logger.warn('Error: %s' % (error_info,))
+
+            if error_info != self._err_info:
+                self._err_info = error_info
+                cursor.execute('UPDATE resource SET err_info=? WHERE rid=?',
+                               (self._err_info, self._id))
+
+            if not self._invalid_since:
+                if feed_xml_downloaded:
+                    if nr_new_items > 0:
+                        # downloaded and new items available, good
+                        self._penalty = (5 * self._penalty) // 6
+                    elif not feed_xml_changed:
+                        # downloaded, but not changed, very bad
+                        self._penalty = (3 * self._penalty) // 4 + 256
+                    else:
+                        # downloaded and changed, but no new items, bad
+                        self._penalty = (15 * self._penalty) // 16 + 64
                 else:
-                    logger.warn(('%d %s %s' % (errcode, errmsg, str(headers))))
-                    error_info = 'HTTP: %d %s' % (errcode, errmsg)
+                    # "not modified" response from server, good
+                    self._penalty = (3 * self._penalty) // 4
 
-            if self._invalid_since and not error_info and redirect_tries == 0:
-                error_info = 'redirect: maximum number of redirects exceeded'
-        except socket.timeout, e:
-            error_info = 'timeout: ' + str(e)
-        except socket.error, e:
-            error_info = 'socket: ' + str(e)
-        except IOError, e:
-            error_info = 'I/O error: ' + str(e)
-        except httplib.BadStatusLine, e:
-            error_info = 'HTTP: bad status line'
-        except httplib.IncompleteRead, e:
-            error_info = 'HTTP: incomplete read'
-        except httplib.UnknownProtocol, e:
-            error_info = 'HTTP: unknown protocol'
-        except httplib.HTTPException, e:
-            error_info = 'HTTP: ' + str(e)
-        except FeedError, e:
-            error_info = 'feed: ' + str(e)
-        except AssertionError, e:
-            error_info = 'assertion: ' + str(e)
-        except DecompressorError, e:
-            error_info = 'decompressor: ' + str(e)
-        except UnicodeError, e:
-            error_info = 'encoding: ' + str(e)
-        except LookupError, e:
-            error_info = 'encoding: ' + str(e)
-        except ValueError, e:
-            error_info = 'misc: ' + str(e)
-        except:
-            traceback.print_exc(file=sys.stdout)
-
-        if error_info:
-            logger.warn('Error: %s' % (error_info,))
-
-        if cursor == None:
-            cursor = Cursor(db)
-            cursor.begin()
-
-        if error_info != self._err_info:
-            self._err_info = error_info
-            cursor.execute('UPDATE resource SET err_info=? WHERE rid=?',
-                           (self._err_info, self._id))
-
-        if not self._invalid_since:
-            if feed_xml_downloaded:
-                if nr_new_items > 0:
-                    # downloaded and new items available, good
-                    self._penalty = (5 * self._penalty) // 6
-                elif not feed_xml_changed:
-                    # downloaded, but not changed, very bad
-                    self._penalty = (3 * self._penalty) // 4 + 256
-                else:
-                    # downloaded and changed, but no new items, bad
-                    self._penalty = (15 * self._penalty) // 16 + 64
-            else:
-                # "not modified" response from server, good
-                self._penalty = (3 * self._penalty) // 4
-
-        if redirect_penalty > 0:
-            # penalty for temporary redirects
-            self._penalty = (7 * self._penalty) // 8 + 128
+            if redirect_penalty > 0:
+                # penalty for temporary redirects
+                self._penalty = (7 * self._penalty) // 8 + 128
 
 
-        cursor.execute('UPDATE resource SET last_modified=?, last_updated=?, etag=?, invalid_since=?, penalty=? WHERE rid=?',
-                       (self._last_modified, self._last_updated, self._etag,
-                        self._invalid_since, self._penalty, self._id))
-        del cursor
+            cursor.execute('UPDATE resource SET last_modified=?, last_updated=?, etag=?, invalid_since=?, penalty=? WHERE rid=?',
+                           (self._last_modified, self._last_updated, self._etag,
+                            self._invalid_since, self._penalty, self._id))
 
         if nr_new_items:
             new_items = items[-nr_new_items:]
@@ -1653,7 +1642,7 @@ class RSS_Resource:
         if nr_new_items:
             # we must not have any other objects locked when trying to lock
             # a resource
-            cursor.unlock()
+            cursor.commit()
             self.lock()
 
         cursor.begin()
@@ -1730,30 +1719,22 @@ class RSS_Resource:
 
 
     # @return ([item], next id)
-    def get_headlines(self, first_id, db_cursor=None, db=None):
-        if db_cursor == None:
-            if db == None:
-                cursor = Cursor(RSS_Resource_db())
-            else:
-                cursor = Cursor(db)
-        else:
-            cursor = db_cursor
+    def get_headlines(self, first_id, db_cursor=None, db=RSS_Resource_db):
+        with Cursor(db, db_cursor) as cursor:
+            if first_id == None:
+                first_id = 0
 
-        if first_id == None:
-            first_id = 0
+            result = cursor.execute('SELECT seq_nr, published, title, link, guid, descr_plain, descr_xhtml FROM resource_data WHERE rid=? AND seq_nr>=? ORDER BY seq_nr',
+                                    (self._id, first_id))
+            items = []
+            last_id = first_id
+            for seq_nr, published, title, link, guid, descr_plain, descr_xhtml in result:
+                if seq_nr >= last_id:
+                    last_id = seq_nr + 1
+                items.append(Data(published=published, title=title, link=link,
+                                  guid=guid, descr_plain=descr_plain,
+                                  descr_xhtml=descr_xhtml))
 
-        result = cursor.execute('SELECT seq_nr, published, title, link, guid, descr_plain, descr_xhtml FROM resource_data WHERE rid=? AND seq_nr>=? ORDER BY seq_nr',
-                                (self._id, first_id))
-        items = []
-        last_id = first_id
-        for seq_nr, published, title, link, guid, descr_plain, descr_xhtml in result:
-            if seq_nr >= last_id:
-                last_id = seq_nr + 1
-            items.append(Data(published=published, title=title, link=link,
-                              guid=guid, descr_plain=descr_plain,
-                              descr_xhtml=descr_xhtml))
-
-        del cursor
         return items, last_id
 
 
@@ -1815,18 +1796,13 @@ class RSS_Resource:
 
 
 def RSS_Resource_id2url(res_id, db_cursor=None):
-    if db_cursor == None:
-        cursor = Cursor(RSS_Resource_db())
-    else:
-        cursor = db_cursor
+    with Cursor(RSS_Resource_db) as cursor:
+        url = None
+        result = cursor.execute('SELECT url FROM resource WHERE rid=?',
+                                (res_id,))
+        for row in result:
+            url = row[0]
 
-    url = None
-    result = cursor.execute('SELECT url FROM resource WHERE rid=?',
-                            (res_id,))
-    for row in result:
-        url = row[0]
-
-    del cursor
     if url == None:
         raise KeyError(res_id)
 
