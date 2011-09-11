@@ -1047,7 +1047,7 @@ class Feed_Parser:
                                '{http://backend.userland.com/rss2}channel',
                                '{http://purl.org/rss/1.0/}channel',
                                '{http://purl.org/rss/2.0/}channel',
-                               '{http://my.netscape.com/publish/formats/rss-0.91.dtd}}channel',
+                               '{http://my.netscape.com/publish/formats/rss-0.91.dtd}channel',
                                '{http://my.netscape.com/rdf/simple/0.9/}channel'))
 
             if channel != None:
