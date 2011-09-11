@@ -1158,7 +1158,10 @@ class Feed_Parser:
 
 
     def __resolve_link(self, url):
-        if url.startswith('/'):
+        if url == None:
+            return '%s://%s%s' % (self.__base_url[0], self.__base_url[1],
+                                  self.__base_url[2])
+        elif url.startswith('/'):
             return '%s://%s%s' % (self.__base_url[0], self.__base_url[1],
                                   url.encode('ascii'))
         else:
