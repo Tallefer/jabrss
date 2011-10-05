@@ -23,6 +23,7 @@ from urlparse import urlparse
 
 from flask import Flask, current_app, render_template, url_for
 from flask.globals import request
+from werkzeug.routing import RequestRedirect
 from werkzeug.exceptions import NotFound
 
 from parserss import RSS_Resource, RSS_Resource_id2url, RSS_Resource_simplify
@@ -173,7 +174,7 @@ def page(ids):
     if ids == 'url' and request.method == 'POST':
         return get_url()
 
-    baseurl = request.base_url[:request.base_url.rindex('.')]
+    baseurl = request.url_root
     db = RSS_Resource_db()
     if ids:
         rids = map(lambda x: string.atoi(x), ids.split(','))
@@ -182,16 +183,16 @@ def page(ids):
     resources = []
 
     if request.method == 'POST':
-        url = request.POST['url']
+        url = request.form['url']
         if not url:
-            return HttpResponseServerError()
+            raise NotFound()
 
         resource = RSS_Resource(url, db)
         if resource.id() not in rids:
             rids.append(resource.id())
 
         rids = map(lambda x: '%d' % (x,), rids)
-        return HttpResponseRedirect(','.join(rids))
+        raise RequestRedirect('%s%s' % (baseurl, ','.join(rids)))
 
     translate_urls = ('m' in request.query_string)
     user_agent = request.headers.get('HTTP_USER_AGENT', None)
@@ -223,6 +224,6 @@ def page(ids):
     response = current_app.response_class(content_iter)
     return response
 
-@app.route('/')
+@app.route('/', methods=('GET', 'POST'))
 def index():
     return page('')
