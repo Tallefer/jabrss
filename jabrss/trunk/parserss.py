@@ -1545,11 +1545,11 @@ class RSS_Resource:
                             url_protocol, url_host, url_path = split_url(redirect_url)
                             redirect_tries = -redirect_tries
                         else:
-                            logger.warn('%d %s %s' % (errcode, errmsg, str(headers)))
-                            error_info = 'HTTP: %d %s' % (errcode, errmsg)
+                            logger.warn('%d %s %s' % (errcode, errmsg.decode('iso8859-1', '?'), str(headers)))
+                            error_info = 'HTTP: %d %s' % (errcode, errmsg.decode('iso8859-1', '?'))
                     else:
-                        logger.warn(('%d %s %s' % (errcode, errmsg, str(headers))))
-                        error_info = 'HTTP: %d %s' % (errcode, errmsg)
+                        logger.warn(('%d %s %s' % (errcode, errmsg.decode('iso8859-1', '?'), str(headers))))
+                        error_info = 'HTTP: %d %s' % (errcode, errmsg.decode('iso8859-1', '?'))
 
                 if self._invalid_since and not error_info and redirect_tries == 0:
                     error_info = 'redirect: maximum number of redirects exceeded'
