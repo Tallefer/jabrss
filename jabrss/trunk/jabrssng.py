@@ -812,7 +812,7 @@ class DummyJabberUser(JabberUser):
     # @throws ValueError
     def add_resource(self, resource, seq_nr=None, db_cursor=None):
         res_id = resource.id()
-        log_message('dummy adding res', res_id, len(self._res_ids))
+        log_message('dummy adding res', str(res_id), str(len(self._res_ids)))
 
         if res_id not in self._res_ids:
             self._res_ids.append(res_id)
@@ -828,7 +828,7 @@ class DummyJabberUser(JabberUser):
     # @throws ValueError
     def remove_resource(self, resource, db_cursor=None):
         res_id = resource.id()
-        log_message('dummy removing res', res_id, len(self._res_ids))
+        log_message('dummy removing res', str(res_id), str(len(self._res_ids)))
 
         if len(self._res_ids) == 0:
             return
@@ -1426,7 +1426,7 @@ class JabRSSStream(XmppStream):
                 log_message(user.jid(), 'subscribed to', url)
                 reply_body = 'You have been subscribed to %s' % (url,)
             except UrlError as url_error:
-                log_message(user.jid(), 'error (%s) subscribing to' % (url_error.args[0],), url)
+                log_message(user.jid(), 'error (%s) subscribing to %s' % (url_error.args[0], url))
                 reply_body = 'Error (%s) subscribing to %s' % (url_error.args[0], url)
             except ValueError:
                 log_message(user.jid(), 'already subscribed to', url)
@@ -2141,10 +2141,10 @@ def console_handler(bot):
                 pass
             elif s == 'debug locks':
                 # show all locked objects
-                log_message('db_sync', db_sync.locked(),
-                            'users_sync', storage._users_sync.locked(),
-                            'resources_sync', storage._resources_sync.locked(),
-                            'RSS_Resource._db_sync', RSS_Resource._db_sync.locked())
+                log_message('db_sync', str(db_sync.locked()),
+                            'users_sync', str(storage._users_sync.locked()),
+                            'resources_sync', str(storage._resources_sync.locked()),
+                            'RSS_Resource._db_sync', str(RSS_Resource._db_sync.locked()))
                 for res in storage._resources.values():
                     if res._lock.locked():
                         log_message('resource %s' % (res._url,))
@@ -2224,7 +2224,7 @@ while not bot.terminated():
         delay = 15
         if int(time.time()) - last_attempt < 30:
             delay += 45
-        log_message('waiting for next connection attempt in', delay, 'seconds')
+        log_message('waiting for next connection attempt in %s seconds' % (delay,))
         time.sleep(delay)
 
     last_attempt = int(time.time())
