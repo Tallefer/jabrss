@@ -19,7 +19,7 @@
 from __future__ import with_statement
 
 import base64, bisect, codecs, getopt, locale, logging, os, ssl, socket
-import sqlite3, string, sys, thread, threading, time, traceback, types
+import sqlite3, sys, threading, time, traceback, types
 
 from getpass import getpass
 from xmpplify import tobytes, Element, JID, Stanza, XmppStream
@@ -29,11 +29,18 @@ from parserss import RSS_Resource_db, RSS_Resource_Cursor
 from parserss import UrlError
 from parserss import init_parserss
 
+if not hasattr(__builtins__, 'raw_input'):
+    raw_input = input
 
 logger = logging.getLogger('JabRSS')
 
 def log_message(*msg):
-    logger.info(u' '.join(map(lambda x: unicode(x), msg)))
+    if sys.version_info[0] == 2:
+        data = map(lambda x: unicode(x), msg)
+    else:
+        data = msg
+
+    logger.info(b' '.decode('ascii').join(data))
 
 init_parserss(dbsync_obj = threading.Lock())
 
@@ -82,7 +89,7 @@ opts, args = getopt.getopt(sys.argv[1:], 'f:h:p:j:',
 for optname, optval in opts:
     if optname in ('-f', '--password-file'):
         fd = open(optval, 'r')
-        JABRSS_PASSWORD = string.strip(fd.readline())
+        JABRSS_PASSWORD = fd.readline().strip()
         fd.close()
     elif optname in ('-h', '--connect-host'):
         JABRSS_HOST = optval
@@ -208,8 +215,8 @@ class Cursor:
         else:
             return self._cursor.execute(stmt, bindings)
 
-    def next(self):
-        return self._cursor.next()
+    def fetchone(self):
+        return self._cursor.fetchone()
 
     def __getattr__(self, name):
         if name == 'lastrowid':
@@ -405,7 +412,7 @@ class DataStorage:
                 try:
                     storage.get_resource_by_id(res_id)
                 except:
-                    log_message('caught exception loading resource', res_id, 'for new user')
+                    log_message('caught exception loading resource', str(res_id), 'for new user')
                     traceback.print_exc(file=sys.stdout)
 
             return user, jid_resource
@@ -441,7 +448,7 @@ storage = DataStorage()
 
 
 def strip_resource(jid):
-    pos = string.find(jid, '/')
+    pos = jid.find('/')
     if pos != -1:
         jid = jid[:pos]
 
@@ -456,7 +463,7 @@ def get_week_nr():
     week_nr = t - ((gmtime[3]*60 + gmtime[4])*60 + gmtime[5])
     week_nr -= gmtime[6]*24*60*60
     week_nr += 84*60*60
-    week_nr /= 7*24*60*60
+    week_nr //= 7*24*60*60
 
     return week_nr
 
@@ -497,17 +504,17 @@ class JabberUser:
         self._size_limit = None
 
         with Cursor(db) as cursor:
-            try:
-                cursor.execute('SELECT uid, conf, store_messages, size_limit FROM user WHERE jid=?',
+            cursor.execute('SELECT uid, conf, store_messages, size_limit FROM user WHERE jid=?',
                            (self._jid,))
-                self._uid, self._configuration, self._store_messages, self._size_limit = cursor.next()
-            except StopIteration:
-                if not create:
-                    raise KeyError(jid)
-
+            row = cursor.fetchone()
+            if row != None:
+                self._uid, self._configuration, self._store_messages, self._size_limit = row
+            elif create:
                 cursor.execute('INSERT INTO user (jid, conf, store_messages, size_limit, since) VALUES (?, ?, ?, ?, ?)',
                                (self._jid, self._configuration, self._store_messages, self._size_limit, get_week_nr()))
                 self._uid = cursor.lastrowid
+            else:
+                raise KeyError(jid)
 
             if self._size_limit == None:
                 self._size_limit = 0
@@ -758,10 +765,11 @@ class JabberUser:
             if new_items:
                 self._adjust_statistics()
                 self._nr_headlines[-1] += len(new_items)
-                items_size = reduce(lambda size, x: (size + len(x.title) +
-                                                     len(x.link) +
-                                                     (x.descr_plain!=None and len(x.descr_plain))),
-                                    [0] + new_items)
+                items_size = 0
+                for item in new_items:
+                    items_size += len(item.title) + len(item.link)
+                    if item.descr_plain != None:
+                        items_size += len(item.descr_plain)
                 self._size_headlines[-1] += items_size
                 self._commit_statistics(cursor)
 
@@ -907,13 +915,13 @@ class JabRSSStream(XmppStream):
                 self._sock.settimeout(30)
                 self._sock.connect(ai[4])
                 break
-            except socket.error, e:
+            except socket.error as e:
                 exc = e
 
         if exc != None:
             raise exc
 
-        log_message('connected to', self._sock.getpeername())
+        log_message('connected to', str(self._sock.getpeername()))
         self._sock.settimeout(600)
         XmppStream.connect(self)
 
@@ -1232,7 +1240,7 @@ class JabRSSStream(XmppStream):
 
     def _process_set(self, stanza, user, argstr):
         try:
-            arg = string.strip(argstr)
+            arg = argstr.strip()
             if arg == 'plaintext':
                 user.set_message_type(0)
                 reply_body = 'Message type set to "plaintext"'
@@ -1243,12 +1251,12 @@ class JabRSSStream(XmppStream):
                 user.set_message_type(2)
                 reply_body = 'Message type set to "chat"'
             else:
-                args = string.split(arg)
+                args = arg.split()
                 if args[0] == 'also_deliver':
                     deliver_cfg = 0
 
                     for s in args[1:]:
-                        s = string.lower(s)
+                        s = s.lower()
                         if s == 'away':
                             deliver_cfg = deliver_cfg | 1
                         elif s == 'xa':
@@ -1263,11 +1271,11 @@ class JabRSSStream(XmppStream):
                     user.set_delivery_state(deliver_cfg)
                     reply_body = '"also_deliver" setting adjusted'
                 elif args[0] == 'store_messages':
-                    store_messages = string.atoi(args[1])
+                    store_messages = int(args[1])
                     user.set_store_messages(store_messages)
                     reply_body = '"store_messages" setting adjusted'
                 elif args[0] == 'size_limit':
-                    size_limit = string.atoi(args[1])
+                    size_limit = int(args[1])
                     user.set_size_limit(size_limit)
                     reply_body = '"size_limit" setting adjusted'
                 elif args[0] == 'header':
@@ -1398,7 +1406,7 @@ class JabRSSStream(XmppStream):
         self.send(reply.asbytes(self._encoding))
 
     def _process_subscribe(self, stanza, user, argstr):
-        args = string.split(argstr)
+        args = argstr.split()
         reply_body = None
 
         for arg in args:
@@ -1421,7 +1429,7 @@ class JabRSSStream(XmppStream):
 
                 log_message(user.jid(), 'subscribed to', url)
                 reply_body = 'You have been subscribed to %s' % (url,)
-            except UrlError, url_error:
+            except UrlError as url_error:
                 log_message(user.jid(), 'error (%s) subscribing to' % (url_error.args[0],), url)
                 reply_body = 'Error (%s) subscribing to %s' % (url_error.args[0], url)
             except ValueError:
@@ -1440,7 +1448,7 @@ class JabRSSStream(XmppStream):
                 self.send(reply.asbytes(self._encoding))
 
     def _process_unsubscribe(self, stanza, user, argstr):
-        args = string.split(argstr)
+        args = argstr.split()
         reply_body = None
 
         for arg in args:
@@ -1457,7 +1465,7 @@ class JabRSSStream(XmppStream):
 
                 log_message(user.jid(), 'unsubscribed from', url)
                 reply_body = 'You have been unsubscribed from %s' % (url,)
-            except UrlError, url_error:
+            except UrlError as url_error:
                 reply_body = 'Invalid URL %s (%s)' % (url, url_error.args[0])
             except KeyError:
                 reply_body = 'For some reason you couldn\'t be unsubscribed from %s' % (url,)
@@ -1476,7 +1484,7 @@ class JabRSSStream(XmppStream):
                 self.send(reply.asbytes(self._encoding))
 
     def _process_info(self, stanza, user, argstr):
-        args = string.split(argstr)
+        args = argstr.split()
         reply_body = None
 
         for arg in args:
@@ -1508,8 +1516,9 @@ class JabRSSStream(XmppStream):
                         text.append('Error: %s' % (error_info,))
 
                 if len(history) >= 4:
-                    sum_items = reduce(lambda x, y: (y[0], x[1] + y[1]),
-                                       history[1:-1])[1]
+                    sum_items = 0
+                    for h in history[1:-1]:
+                        sum_items += h[1]
                     time_span = history[-1][0] - history[0][0]
 
                     msg_rate = sum_items / (time_span / 2592000.0)
@@ -1528,7 +1537,7 @@ class JabRSSStream(XmppStream):
                     text.append('Frequency: ~%d headlines per %s' % (msg_rate, rate_unit))
 
                 reply_body = '\n'.join(text)
-            except UrlError, url_error:
+            except UrlError as url_error:
                 reply_body = 'Invalid URL %s (%s)' % (url, url_error.args[0])
             except KeyError:
                 reply_body = 'No information available about %s' % (url,)
@@ -1595,7 +1604,7 @@ class JabRSSStream(XmppStream):
         if typ == None or body == None:
             return
 
-        body = string.strip(body)
+        body = body.strip()
         log_message('message', typ, sender.tostring(), body)
 
         if sender.user() == None:
@@ -1657,11 +1666,11 @@ class JabRSSStream(XmppStream):
 
         user, jid_resource = storage.load_user(sender, presence)
         if user == None:
-            log_message('presence ignored', sender.tostring(), show)
+            log_message('presence ignored', sender.tostring(), str(show))
         elif not user.get_delivery_state(presence):
-            log_message('presence', sender.tostring(), show)
+            log_message('presence', sender.tostring(), str(show))
         else:
-            log_message('presence', sender.tostring(), show)
+            log_message('presence', sender.tostring(), str(show))
             subs = None
 
             for res_id in user.resources()[:]:
@@ -1764,7 +1773,7 @@ class JabRSSStream(XmppStream):
 
 
     def roster_updated(self, item):
-        if type(item) in (types.ListType, types.TupleType):
+        if type(item) in (type([]), type([])):
             subscribers = {}
             for elem in item:
                 user, subscription = elem.get('jid'), elem.get('subscription')
@@ -1782,7 +1791,7 @@ class JabRSSStream(XmppStream):
                 for username, uid in result:
                     if username.find('/') != -1:
                         storage.remove_user(uid)
-                    elif not subscribers.has_key(username):
+                    elif not subscribers.get(username, False):
                         delete_users.append(username)
                     else:
                         subscribers[username] = False
@@ -2136,7 +2145,7 @@ def console_handler(bot):
     try:
         while True:
             s = raw_input()
-            s = ' '.join(map(string.strip, s.split()))
+            s = ' '.join(map(lambda x: x.strip(), s.split()))
 
             if s == '':
                 pass
@@ -2202,8 +2211,9 @@ locale.setlocale(locale.LC_CTYPE, '')
 encoding = locale.getlocale()[1]
 if not encoding:
     encoding = 'us-ascii'
-sys.stdout = codecs.getwriter(encoding)(sys.stdout, errors='replace')
-sys.stderr = codecs.getwriter(encoding)(sys.stderr, errors='replace')
+if sys.version_info[0] == 2:
+    sys.stdout = codecs.getwriter(encoding)(sys.stdout, errors='replace')
+    sys.stderr = codecs.getwriter(encoding)(sys.stderr, errors='replace')
 
 
 logger = logging.getLogger()
@@ -2212,8 +2222,8 @@ logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.INFO)
 
 bot = JabRSSStream(JABRSS_JID, JABRSS_HOST, JABRSS_PASSWORD)
-thread.start_new_thread(bot.run, ())
-thread.start_new_thread(console_handler, (bot,))
+threading.Thread(target=bot.run).start()
+threading.Thread(target=console_handler, args=(bot,)).start()
 
 
 last_attempt, last_presence = 0, int(time.time()) - 600
