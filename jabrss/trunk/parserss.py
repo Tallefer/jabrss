@@ -370,14 +370,14 @@ class HTTPConnection(httplib.HTTPConnection):
                 self.sock = socket.socket(af, socktype, proto)
                 self.sock.settimeout(self.timeout)
                 self.sock.connect(sa)
-            except socket.error, msg:
+            except socket.error as msg:
                 if self.sock:
                     self.sock.close()
                 self.sock = None
                 continue
             break
         if not self.sock:
-            raise socket.error, msg
+            raise socket.error(msg)
 
     def connect(self):
         if sys.version_info >= (2, 6, 0):
@@ -409,14 +409,14 @@ class HTTPSConnection(httplib.HTTPSConnection):
                 sock = socket.socket(af, socktype, proto)
                 sock.settimeout(self.timeout)
                 sock.connect(sa)
-            except socket.error, msg:
+            except socket.error as msg:
                 if sock:
                     sock.close()
                 sock = None
                 continue
             break
         if not sock:
-            raise socket.error, msg
+            raise socket.error(msg)
         else:
             ssl = socket.ssl(sock, self.key_file, self.cert_file)
             self.sock = httplib.FakeSocket(sock, ssl)
@@ -1245,7 +1245,7 @@ class RSS_Resource:
             for row in result:
                 history_times = filter(lambda x: x!=None, row[0:16])
                 history_nr = filter(lambda x: x!=None, row[16:32])
-                self._history = zip(history_times, history_nr)
+                self._history = list(zip(history_times, history_nr))
         del db
 
 
@@ -1553,31 +1553,31 @@ class RSS_Resource:
 
                 if self._invalid_since and not error_info and redirect_tries == 0:
                     error_info = 'redirect: maximum number of redirects exceeded'
-            except socket.timeout, e:
+            except socket.timeout as e:
                 error_info = 'timeout: ' + str(e)
-            except socket.error, e:
+            except socket.error as e:
                 error_info = 'socket: ' + str(e)
-            except IOError, e:
+            except IOError as e:
                 error_info = 'I/O error: ' + str(e)
-            except httplib.BadStatusLine, e:
+            except httplib.BadStatusLine as e:
                 error_info = 'HTTP: bad status line'
-            except httplib.IncompleteRead, e:
+            except httplib.IncompleteRead as e:
                 error_info = 'HTTP: incomplete read'
-            except httplib.UnknownProtocol, e:
+            except httplib.UnknownProtocol as e:
                 error_info = 'HTTP: unknown protocol'
-            except httplib.HTTPException, e:
+            except httplib.HTTPException as e:
                 error_info = 'HTTP: ' + str(e)
-            except FeedError, e:
+            except FeedError as e:
                 error_info = 'feed: ' + str(e)
-            except AssertionError, e:
+            except AssertionError as e:
                 error_info = 'assertion: ' + str(e)
-            except DecompressorError, e:
+            except DecompressorError as e:
                 error_info = 'decompressor: ' + str(e)
-            except UnicodeError, e:
+            except UnicodeError as e:
                 error_info = 'encoding: ' + str(e)
-            except LookupError, e:
+            except LookupError as e:
                 error_info = 'encoding: ' + str(e)
-            except ValueError, e:
+            except ValueError as e:
                 error_info = 'misc: ' + str(e)
             except:
                 traceback.print_exc(file=sys.stdout)
@@ -1848,7 +1848,7 @@ if __name__ == '__main__':
             print('error info %s' % (error_info))
 
         if len(new_items) > 0:
-            print('new items (next id; %d):\n  %s' %
+            print('new items (next id: %d):\n  %s' %
                   (next_item_id,
                    '\n  '.join(['%s - %s' % (x.title, x.link) for x in new_items])))
 
