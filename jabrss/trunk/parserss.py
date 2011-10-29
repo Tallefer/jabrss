@@ -64,13 +64,7 @@ if sys.version_info[0] == 2:
             '\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f' \
             ''.encode('ascii'),
         '          \x0a                     '.encode('ascii'))
-
-    def byteliteral(b):
-        return b
 else:
-    def byteliteral(b):
-        return b.encode('latin1')
-
     str_trans = None
     def buffer(b):
         return b
@@ -169,7 +163,7 @@ def split_url(url):
 
 
 def normalize_text(s):
-    if type(s) == type(byteliteral('').decode('ascii')):
+    if type(s) == type(b''.decode('ascii')):
         s = s.translate(unicode_trans)
     else:
         s = s.translate(str_trans)
@@ -182,7 +176,7 @@ def normalize_obj(o):
     for attr in dir(o):
         if attr[0] != '_':
             value = getattr(o, attr)
-            if type(value) in (type(''), type(byteliteral('').decode('ascii'))):
+            if type(value) in (type(''), type(b''.decode('ascii'))):
                 setattr(o, attr, normalize_text(value))
 
     return o
@@ -442,16 +436,16 @@ class Null_Decompressor:
         return s
 
     def flush(self):
-        return byteliteral('')
+        return b''
 
 
 class Deflate_Decompressor:
     def __init__(self):
-        self._adler32 = zlib.adler32(byteliteral(''))
+        self._adler32 = zlib.adler32(b'')
         self._raw_deflate = False
 
         self._decompress = zlib.decompressobj()
-        self._buffer = byteliteral('')
+        self._buffer = b''
 
         self._state_feed = Deflate_Decompressor._feed_header
 
@@ -461,7 +455,7 @@ class Deflate_Decompressor:
 
     def feed(self, s):
         self._buffer = self._buffer + s
-        data = byteliteral('')
+        data = b''
 
         while self._state_feed and len(self._buffer):
             res = self._state_feed(self)
@@ -476,7 +470,7 @@ class Deflate_Decompressor:
         return data
 
     def flush(self):
-        data = byteliteral('')
+        data = b''
 
         while self._state_feed:
             res = self._state_feed(self)
@@ -484,7 +478,7 @@ class Deflate_Decompressor:
             if res:
                 self._update_adler32(res)
                 data += res
-            elif res == byteliteral('') and self._state_feed != None:
+            elif res == b'' and self._state_feed != None:
                 raise IOError('premature EOF')
 
         if len(self._buffer):
@@ -499,13 +493,13 @@ class Deflate_Decompressor:
             header_int = struct.unpack('>H', header)[0]
             if header_int % 31 != 0:
                 self._raw_deflate = True
-                self._buffer = byteliteral('\x78\x9c') + self._buffer
+                self._buffer = b'\x78\x9c' + self._buffer
 
             self._state_feed = Deflate_Decompressor._feed_data
             return None
 
         # need more data
-        return byteliteral('')
+        return b''
 
     def _feed_data(self):
         if len(self._buffer) > 0:
@@ -528,19 +522,19 @@ class Deflate_Decompressor:
 
     def _feed_eof(self):
         self._state_feed = None
-        return byteliteral('')
+        return b''
 
 
 class Gzip_Decompressor:
     FTEXT, FHCRC, FEXTRA, FNAME, FCOMMENT = 1, 2, 4, 8, 16
 
     def __init__(self):
-        self._crc = zlib.crc32(byteliteral(''))
+        self._crc = zlib.crc32(b'')
         self._size = 0
 
         self._decompress = zlib.decompressobj(-zlib.MAX_WBITS)
         self._header_flag = 0
-        self._buffer = byteliteral('')
+        self._buffer = b''
 
         self._state_feed = Gzip_Decompressor._feed_header_static
 
@@ -550,7 +544,7 @@ class Gzip_Decompressor:
 
     def feed(self, s):
         self._buffer = self._buffer + s
-        data = byteliteral('')
+        data = b''
 
         while self._state_feed and len(self._buffer):
             res = self._state_feed(self)
@@ -565,7 +559,7 @@ class Gzip_Decompressor:
         return data
 
     def flush(self):
-        data = byteliteral('')
+        data = b''
 
         while self._state_feed:
             res = self._state_feed(self)
@@ -573,7 +567,7 @@ class Gzip_Decompressor:
             if res:
                 self._update_crc32(res)
                 data += res
-            elif res == byteliteral('') and self._state_feed != None:
+            elif res == b'' and self._state_feed != None:
                 raise IOError('premature EOF')
 
         if len(self._buffer):
@@ -584,7 +578,7 @@ class Gzip_Decompressor:
     def _feed_header_static(self):
         if len(self._buffer) >= 10:
             magic = self._buffer[:2]
-            if magic != byteliteral('\037\213'):
+            if magic != b'\037\213':
                 raise IOError('Not a gzipped file')
             method = ord(self._buffer[2:3])
             if method != 8:
@@ -599,7 +593,7 @@ class Gzip_Decompressor:
             return None
 
         # need more data
-        return byteliteral('')
+        return b''
 
     def _feed_header_flags(self):
         if self._header_flag & Gzip_Decompressor.FEXTRA:
@@ -612,14 +606,14 @@ class Gzip_Decompressor:
                     return None
         elif self._header_flag & Gzip_Decompressor.FNAME:
             # Read and discard a null-terminated string containing the filename
-            pos = self._buffer.find(byteliteral('\0'))
+            pos = self._buffer.find(b'\0')
             if pos != -1:
                 self._buffer = self._buffer[pos + 1:]
                 self._header_flag = self._header_flag & ~Gzip_Decompressor.FNAME
                 return None
         elif self._header_flag & Gzip_Decompressor.FCOMMENT:
             # Read and discard a null-terminated string containing a comment
-            pos = self._buffer.find(byteliteral('\0'))
+            pos = self._buffer.find(b'\0')
             if pos != -1:
                 self._buffer = self._buffer[pos + 1:]
                 self._header_flag = self._header_flag & ~Gzip_Decompressor.FCOMMENT
@@ -634,7 +628,7 @@ class Gzip_Decompressor:
             return None
 
         # need more data
-        return byteliteral('')
+        return b''
 
     def _feed_data(self):
         if len(self._buffer) > 0:
@@ -665,7 +659,7 @@ class Gzip_Decompressor:
 
             self._buffer = self._buffer[8:]
             self._state_feed = None
-        return byteliteral('')
+        return b''
 
 
 class FeedError(Exception):
