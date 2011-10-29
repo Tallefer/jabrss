@@ -18,7 +18,7 @@
 
 from __future__ import with_statement
 
-import base64, bisect, codecs, getopt, locale, logging, os, ssl, socket
+import base64, bisect, codecs, getopt, logging, os, ssl, socket
 import sqlite3, sys, threading, time, traceback, types
 
 from getpass import getpass
@@ -1409,12 +1409,8 @@ class JabRSSStream(XmppStream):
         args = argstr.split()
         reply_body = None
 
-        for arg in args:
-            url = ''
-
+        for url in args:
             try:
-                url = arg.encode('ascii')
-
                 resource = storage.get_resource(url)
                 try:
                     url = resource.url()
@@ -1451,11 +1447,8 @@ class JabRSSStream(XmppStream):
         args = argstr.split()
         reply_body = None
 
-        for arg in args:
-            url = ''
-
+        for url in args:
             try:
-                url = arg.encode('ascii')
                 resource = storage.get_cached_resource(url)
                 resource.lock()
                 try:
@@ -1487,11 +1480,8 @@ class JabRSSStream(XmppStream):
         args = argstr.split()
         reply_body = None
 
-        for arg in args:
-            url = ''
-
+        for url in args:
             try:
-                url = arg.encode('ascii')
                 resource = storage.get_cached_resource(url)
 
                 last_updated, last_modified, invalid_since = resource.times()
@@ -2207,11 +2197,13 @@ def console_handler(bot):
     bot.disconnect()
 
 
-locale.setlocale(locale.LC_CTYPE, '')
-encoding = locale.getlocale()[1]
-if not encoding:
-    encoding = 'us-ascii'
 if sys.version_info[0] == 2:
+    import locale
+
+    locale.setlocale(locale.LC_CTYPE, '')
+    encoding = locale.getlocale()[1]
+    if not encoding:
+        encoding = 'us-ascii'
     sys.stdout = codecs.getwriter(encoding)(sys.stdout, errors='replace')
     sys.stderr = codecs.getwriter(encoding)(sys.stderr, errors='replace')
 

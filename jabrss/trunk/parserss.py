@@ -55,9 +55,6 @@ __all__ = [
     'UrlError', 'init_parserss',
 ]
 
-re_validhost = re.compile('^(?P<host>[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+)$')
-re_blockhost = re.compile('^(10\.|127\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168\.)')
-
 if sys.version_info[0] == 2:
     import string
     str_trans = string.maketrans(
@@ -126,41 +123,83 @@ class UrlError(ValueError):
 def split_url(url):
     u = urlsplit(url)
 
-    url_protocol = u.scheme
+    protocol = u.scheme
 
     netloc_comp = u.netloc.split(':', 2)
-    url_host = netloc_comp[0].lower()
+    host = netloc_comp[0].lower().split('.')
     if len(netloc_comp) >= 2:
-        url_port = netloc_comp[1]
+        port = netloc_comp[1]
     else:
-        url_port = None
+        port = None
 
-    url_path = u.path
+    path = u.path
     if u.query:
-        url_path += '?' + u.query
+        path += '?' + u.query
 
-    if not re_validhost.match(url_host):
-        raise UrlError('invalid host in URL "%s"' % (url_host,))
+    validhost = False
 
-    if url_protocol == 'http':
-        if (url_port != None) and (url_port != '80') and (url_port != 'http'):
+    if len(host) == 1 and host[0][:1] == '[' and host[0][-1:] == ']':
+        try:
+            host[0] = '[%s]' % (socket.inet_ntop(socket.AF_INET6, socket.inet_pton(socket.AF_INET6, host[0][1:-1])))
+            validhost = True
+        except socket.error:
+            validhost = False
+    elif len(host) == 4:
+        try:
+            host = socket.inet_ntop(socket.AF_INET, socket.inet_pton(socket.AF_INET, '.'.join(host))).split('.')
+            if int(host[0]) == 10:
+                pass
+            elif int(host[0]) == 172 and int(host[1]) in range(16, 32):
+                pass
+            elif int(host[0]) == 192 and int(host[1]) == 168:
+                pass
+            elif int(host[0]) >= 240:
+                pass
+            else:
+                validhost = True
+        except socket.error:
+            validhost = False
+
+    if not validhost and len(host) >= 2:
+        if len(host[-1]) >= 2 and host[-1].isalpha():
+            validhost = True
+
+            def encode_puny(s):
+                if s.startswith('xn--'):
+                    for c in s:
+                        if not c.isalnum() and c != '-':
+                            raise UrlError('invalid host in URL')
+                    return s
+                elif len(s):
+                    c = (b''.decode('ascii') + s).encode('punycode').decode('ascii')
+                    if c[-1] != '-':
+                        return 'xn--%s' % (c,)
+                    else:
+                        return s
+                else:
+                    raise UrlError('invalid host in URL')
+
+            host = list(map(encode_puny, host[:-1])) + [host[-1]]
+
+    if not validhost:
+        raise UrlError('invalid host in URL "%s"' % ('.'.join(host),))
+
+    if protocol == 'http':
+        if port not in (None, '80', 'http'):
             raise UrlError('http ports != 80 not allowed')
-    elif url_protocol == 'https':
-        if (url_port != None) and (url_port != '443') and (url_port != 'https'):
+    elif protocol == 'https':
+        if port not in (None, '443', 'https'):
             raise UrlError('https ports != 443 not allowed')
     else:
-        raise UrlError('unsupported protocol "%s"' % (url_protocol))
+        raise UrlError('unsupported protocol "%s"' % (protocol))
 
-    if url_path == '':
-        url_path = '/'
+    if path == '':
+        path = '/'
 
-    while url_path[:2] == '//':
-        url_path = url_path[1:]
+    while path[:2] == '//':
+        path = path[1:]
 
-    if re_blockhost.match(url_host):
-        raise UrlError('host "%s" not allowed' % (url_host,))
-
-    return url_protocol, url_host, url_path
+    return protocol, '.'.join(host), path
 
 
 def normalize_text(s):
@@ -1158,9 +1197,9 @@ class Feed_Parser:
                                   self.__base_url[2])
         elif url.startswith('/'):
             return '%s://%s%s' % (self.__base_url[0], self.__base_url[1],
-                                  url.encode('ascii'))
+                                  url)
         else:
-            return url.encode('ascii')
+            return url
 
 
     def feed(self, data):
@@ -1812,9 +1851,7 @@ def RSS_Resource_id2url(res_id, db_cursor=None):
 
 def RSS_Resource_simplify(url):
     url_protocol, url_host, url_path = split_url(url)
-
-    simple_url = url_protocol + '://' + url_host + url_path
-    # TODO: return simple_url
+    simple_url = '%s://%s%s' % (url_protocol, url_host, url_path)
     return url
 
 
