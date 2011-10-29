@@ -18,7 +18,7 @@
 
 from __future__ import with_statement
 
-import codecs, hashlib, logging, random, re, socket, string, struct
+import codecs, hashlib, logging, random, re, socket, struct
 import sys, time, threading, traceback, zlib
 import sqlite3
 
@@ -59,6 +59,7 @@ re_validhost = re.compile('^(?P<host>[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+)$')
 re_blockhost = re.compile('^(10\.|127\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168\.)')
 
 if sys.version_info[0] == 2:
+    import string
     str_trans = string.maketrans(
         '\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f' \
             '\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f' \
@@ -251,11 +252,11 @@ def compare_items(l, r):
 
         if lurl.scheme == rurl.scheme and lurl.path == rurl.path and \
                 lurl.query == rurl.query and lurl.fragment == rurl.fragment:
-            lhostparts = string.split(lurl.netloc.lower(), '.')
+            lhostparts = lurl.netloc.lower().split('.')
             if lhostparts[-1] == '':
                 del lhostparts[-1]
 
-            rhostparts = string.split(rurl.netloc.lower(), '.')
+            rhostparts = rurl.netloc.lower().split('.')
             if rhostparts[-1] == '':
                 del rhostparts[-1]
 
@@ -1742,14 +1743,17 @@ class RSS_Resource:
         if len(self._history) >= 2:
             hist_items = len(self._history)
 
-            sum_items = reduce(lambda x, y: (y[0], x[1] + y[1]),
-                               self._history[1:])[1]
+            sum_items = 0
+            for h in self._history[1:]:
+                sum_items += h[1]
             time_span = self._last_updated - self._history[0][0]
 
             if hist_items >= 12:
                 time_span_old = self._history[hist_items // 2][0] - self._history[0][0]
-                sum_items_old = reduce(lambda x, y: (y[0], x[1] + y[1]),
-                                       self._history[1:hist_items // 2 + 1])[1]
+                sum_items_old = 0
+                for h in self._history[1:hist_items // 2 + 1]:
+                    sum_items_old += h[1]
+
                 if (3 * sum_items_old < sum_items) and (5 * time_span_old < time_span):
                     time_span = time_span_old
                     sum_items = sum_items_old
@@ -1777,7 +1781,7 @@ class RSS_Resource:
         else:
             interval = 8*60*60
 
-        if string.find(string.lower(self._url), 'slashdot.org') != -1:
+        if self._url.lower().find('slashdot.org') != -1:
             # yes, slashdot sucks - this is a special slashdot
             # throttle to avaoid being banned by slashdot
             interval = interval + 150*60
