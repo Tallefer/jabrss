@@ -169,11 +169,8 @@ def get_url():
 
     return response
 
-@app.route('/<ids>', methods=('GET', 'POST'))
-def page(ids):
-    if ids == 'url' and request.method == 'POST':
-        return get_url()
-
+@app.route('/r/<ids>', methods=('GET', 'POST'))
+def page(ids, actionprefix=''):
     baseurl = request.url_root
     db = RSS_Resource_db()
     if ids:
@@ -215,6 +212,7 @@ def page(ids):
     content_top = render_template('top.html', baseurl=baseurl,
                                   rids=db_rids, ridlist=ridlist)
     content_bottom = render_template('bottom.html', baseurl=baseurl,
+                                     actionprefix=actionprefix,
                                      rids=db_rids, ridlist=ridlist)
 
     content_iter = itertools.chain(iter((content_top,)),
@@ -226,4 +224,4 @@ def page(ids):
 
 @app.route('/', methods=('GET', 'POST'))
 def index():
-    return page('')
+    return page('', 'r/')
