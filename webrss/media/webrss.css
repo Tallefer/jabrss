@@ -1,0 +1,58 @@
+/*
+ * Copyright (C) 2005, Christof Meerwald
+ * http://cmeerw.org
+ */
+
+BODY {
+  background: rgb(180, 180, 180);
+  color: rgb(0, 0, 0);
+}
+
+H1 {
+  font-family: sans-serif;
+  margin-top: 12pt;
+  margin-bottom: 12pt;
+  text-align: left;
+}
+
+H2 {
+  margin-top: 0pt;
+  margin-bottom: 12pt;
+  font-family: sans-serif;
+}
+
+A:link {
+  color: rgb(128, 64, 0);
+}
+
+A:active {
+  color: rgb(192, 0, 0);
+}
+
+A:visited {
+  color: rgb(64, 128, 0);
+}
+
+DIV.resheader {
+  padding-right: 6pt;
+  padding-left: 6pt;
+  padding-top: 4pt;
+  padding-bottom: 4pt;
+  text-align: left;
+  background: rgb(200, 200, 200);
+  border: solid rgb(160, 160, 160);
+}
+
+SPAN.resinfo {
+  font-family: sans-serif;
+  font-size: 90%;
+}
+
+SPAN.error {
+  color: #c00000;
+}
+
+UL.headlines {
+  margin-bottom: 36pt;
+  list-style-type: disc;
+}
