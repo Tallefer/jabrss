@@ -71,7 +71,7 @@ configuration
 show statistics
 show usage
 
-Please refer to the JabRSS command reference at http://dev.cmeerw.org/book/view/30 for more information.
+Please refer to the JabRSS command reference at http://dev.cmeerw.org/jabrss/Documentation for more information.
 
 And of course, if you like this service you might also consider a donation, see http://cmeerw.org/donate.html'''
 
@@ -1630,7 +1630,7 @@ class JabRSSStream(XmppStream):
                         reply = Stanza.Message(to = stanza.get_from(),
                                                type = stanza.get_type(),
                                                subject = stanza.get_subject(),
-                                               body = 'Unknown command. Please refer to the documentation at http://dev.cmeerw.org/book/view/30')
+                                               body = 'Unknown command. Please refer to the documentation at http://dev.cmeerw.org/jabrss/Documentation')
                         self.send(reply.asbytes(self._encoding))
 
                 if not unknown_msg:

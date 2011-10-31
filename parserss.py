@@ -1221,6 +1221,23 @@ class Feed_Parser:
         return elem
 
 
+def default_redirect_cb(redirect_url, db, redirect_count):
+    resource_url = RSS_Resource_simplify(redirect_url)
+    while resource_url != None:
+        redirect_resource = RSS_Resource(resource_url, db)
+        resource_url, redirect_seq = redirect_resource.redirect_info(db)
+
+    new_items, next_item_id, redirect_target, redirect_seq, redirects = redirect_resource.update(db, redirect_count)
+
+    if len(new_items) > 0:
+        redirects.insert(0, (redirect_resource, new_items, next_item_id))
+
+    if redirect_target != None:
+        redirect_resource = redirect_target
+
+    return redirect_resource, redirects
+
+
 class RSS_Resource:
     NR_ITEMS = 64
 
@@ -1340,7 +1357,8 @@ class RSS_Resource:
 
     # @return ([item], next_item_id, redirect_resource, redirect_seq, [redirects])
     # locks the resource object if new_items are returned
-    def update(self, db=RSS_Resource_db, redirect_count=5, redirect_cb=None):
+    def update(self, db=RSS_Resource_db, redirect_count=5,
+               redirect_cb=default_redirect_cb):
         now = int(time.time())
 
         # sanity check update interval
@@ -1376,6 +1394,7 @@ class RSS_Resource:
         with Cursor(db) as cursor:
             try:
                 url_protocol, url_host, url_path = self._url_protocol, self._url_host, self._url_path
+                logger.debug('updating %s://%s%s' % (url_protocol, url_host, url_path))
 
                 while redirect_tries > 0:
                     redirect_tries = -(redirect_tries - 1)
@@ -1383,32 +1402,29 @@ class RSS_Resource:
                     if redirect_permanent:
                         redirect_url = url_protocol + '://' + url_host + url_path
                         if redirect_url != self._url:
-                            #log_message('redirect: %s -> %s' % (self._url.encode('iso8859-1', 'replace'), redirect_url.encode('iso8859-1', 'replace')))
-                            if redirect_cb != None:
-                                redirect_resource, redirects = redirect_cb(redirect_url, db, -redirect_tries + 1)
+                            redirect_resource, redirects = redirect_cb(redirect_url, db, -redirect_tries + 1)
 
-                                # only perform the redirect if target is valid
-                                if redirect_resource._invalid_since:
-                                    error_info = redirect_resource._err_info
-                                    self._last_modified = redirect_resource._last_modified
-                                    self._etag = redirect_resource._etag
-                                    redirect_resource = None
-                                else:
-                                    redirect_items, redirect_seq = redirect_resource.get_headlines(0, cursor)
+                            # only perform the redirect if target is valid
+                            if redirect_resource._invalid_since:
+                                error_info = redirect_resource._err_info
+                                self._last_modified = redirect_resource._last_modified
+                                self._etag = redirect_resource._etag
+                                redirect_resource = None
+                            else:
+                                redirect_items, redirect_seq = redirect_resource.get_headlines(0, cursor)
 
-                                    items, first_item_id, nr_new_items = self._process_new_items(redirect_items, cursor)
-                                    del redirect_items
+                                items, first_item_id, nr_new_items = self._process_new_items(redirect_items, cursor)
+                                del redirect_items
 
-                                    self._last_modified = None
-                                    self._etag = None
+                                self._last_modified, self._etag = None, None
 
-                                    self._redirect = redirect_resource._id
-                                    self._redirect_seq = redirect_seq
-                                    cursor.execute('UPDATE resource SET redirect=?, redirect_seq=? WHERE rid=?',
-                                                   (self._redirect,
-                                                    self._redirect_seq, self._id))
+                                self._redirect = redirect_resource._id
+                                self._redirect_seq = redirect_seq
+                                cursor.execute('UPDATE resource SET redirect=?, redirect_seq=? WHERE rid=?',
+                                               (self._redirect,
+                                                self._redirect_seq, self._id))
 
-                                break
+                            break
 
 
                     if RSS_Resource.http_proxy and (url_protocol == 'http'):
@@ -1873,7 +1889,9 @@ if __name__ == '__main__':
     db = RSS_Resource_db()
 
     for url in sys.argv[1:]:
-        resource = RSS_Resource(url, db)
+        while url != None:
+            resource = RSS_Resource(url, db)
+            url, seqnr = resource.redirect_info(db)
 
         new_items, next_item_id, redirect_resource, redirect_seq, redirects = resource.update(db)
         channel_info = resource.channel_info()

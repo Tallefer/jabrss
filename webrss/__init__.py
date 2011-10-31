@@ -46,7 +46,10 @@ def feed(url, translate_urls=False, reqprefix='', db=None,
     if db == None:
         db = RSS_Resource_db()
 
-    resource = RSS_Resource(url, db)
+    while url != None:
+        resource = RSS_Resource(url, db)
+        url, seq = resource.redirect_info(db)
+
     next_update = resource.next_update(False)
 
     if next_update <= now:
@@ -60,7 +63,7 @@ def feed(url, translate_urls=False, reqprefix='', db=None,
     if not channel_title.strip():
         channel_title = channel_info.link
     if not channel_title.strip():
-        channel_title = url
+        channel_title = resource.url()
 
     last_updated, last_modified, invalid_since = resource.times()
     last_updated = time.asctime(time.gmtime(last_updated))
@@ -112,7 +115,7 @@ def feed(url, translate_urls=False, reqprefix='', db=None,
 
             item.link = lnk
 
-    return (resource.id(), templ.render(rid=resource.id(), url=url,
+    return (resource.id(), templ.render(rid=resource.id(), url=resource.url(),
                                         reqprefix=reqprefix,
                                         link=channel_info.link,
                                         title=channel_title,
@@ -187,7 +190,10 @@ def page(ids, reqprefix=''):
         if not url:
             raise NotFound()
 
-        resource = RSS_Resource(url, db)
+        while url != None:
+            resource = RSS_Resource(url, db)
+            url, seq = resource.redirect_info(db)
+
         if resource.id() not in rids:
             rids.append(resource.id())
 
