@@ -1112,12 +1112,15 @@ class Feed_Parser:
             link = elem.findtext('{http://www.pheedo.com/namespace/pheedo}origLink') or \
                 elem.findtext('{http://rssnamespace.org/feedburner/ext/1.0}origLink') or \
                 elem.findtext(ns + 'link')
-            if not link:
-                enclosure = elem.find(ns + 'enclosure')
-                if enclosure != None:
+
+            enclosure = elem.find(ns + 'enclosure')
+            if enclosure != None and enclosure.get('url', ''):
+                if not link or enclosure.get('type', '') in ('audio/mpeg',):
+                    # prioritise certain types of enclosures
                     link = enclosure.get('url', '')
-                elif link == None:
-                    link = ''
+
+            if link == None:
+                link = ''
 
             guid = elem.get('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about', None) or \
                 elem.findtext(ns + 'guid')
@@ -1595,11 +1598,11 @@ class RSS_Resource:
                             url_protocol, url_host, url_path = split_url(redirect_url)
                             redirect_tries = -redirect_tries
                         else:
-                            logger.warn('%d %s %s' % (errcode, errmsg.decode('iso8859-1', '?'), str(headers)))
-                            error_info = 'HTTP: %d %s' % (errcode, errmsg.decode('iso8859-1', '?'))
+                            error_info = 'HTTP: %d %s' % (errcode, repr(errmsg))
+                            logger.warn(error_info + '\n' + str(headers))
                     else:
-                        logger.warn(('%d %s %s' % (errcode, errmsg.decode('iso8859-1', '?'), str(headers))))
-                        error_info = 'HTTP: %d %s' % (errcode, errmsg.decode('iso8859-1', '?'))
+                        error_info = 'HTTP: %d %s' % (errcode, repr(errmsg))
+                        logger.warn(error_info + '\n' + str(headers))
 
                 if self._invalid_since and not error_info and redirect_tries == 0:
                     error_info = 'redirect: maximum number of redirects exceeded'
