@@ -5,5 +5,5 @@ polled: {{ polled }}
 {% if error_info %}<br /><span class="error">Error: {{ error_info }}</span>{% endif %}
 </span></div>
 <ul class="headlines">
-{% for item in items %}<li><a href="{{ item.link|escape }}">{{ item.title|escape }}</a></li>{% endfor %}
+{% for item in items %}<li><a href="{{ item.link|escape }}">{{ item.title|escape }}</a>{% if item.published %} ({{ item.published }}){% endif %}</li>{% endfor %}
 </ul>
