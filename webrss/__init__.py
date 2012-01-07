@@ -50,8 +50,10 @@ def format_timestamp(ts):
         return 'just now'
     elif diff < 70:
         return '%d seconds ago' % (diff,)
-    elif diff < 70*60:
+    elif diff < 90*60:
         return '%d minutes ago' % (diff // 60,)
+    elif diff < 2*60*60:
+        return '1 hour ago'
     elif diff < 30*60*60:
         return '%d hours ago' % (diff // 3600,)
 
