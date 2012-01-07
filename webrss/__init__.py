@@ -41,6 +41,9 @@ init_parserss(db_fname = DB_FNAME,
 
 
 def format_timestamp(ts):
+    if ts == None:
+        return None
+
     now = int(time.time())
     diff = now - ts
 
