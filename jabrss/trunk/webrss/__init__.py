@@ -40,6 +40,24 @@ init_parserss(db_fname = DB_FNAME,
               interval_div = 5)
 
 
+def format_timestamp(ts):
+    now = int(time.time())
+    diff = now - ts
+
+    if diff < 0:
+        return None
+    elif diff < 10:
+        return 'just now'
+    elif diff < 70:
+        return '%d seconds ago' % (diff,)
+    elif diff < 70*60:
+        return '%d minutes ago' % (diff // 60,)
+    elif diff < 30*60*60:
+        return '%d hours ago' % (diff // 3600,)
+
+    return '%d days ago' % (diff // 86400,)
+
+
 def feed(url, translate_urls=False, reqprefix='', db=None,
          templ=app.jinja_env.get_template('feed.html')):
     now = int(time.time())
@@ -78,6 +96,9 @@ def feed(url, translate_urls=False, reqprefix='', db=None,
     items, last_id = resource.get_headlines(None)
     items = items[-15:]
     items.reverse()
+
+    for item in items:
+        item.published = format_timestamp(item.published)
 
     if translate_urls:
         cursor = db.cursor()
