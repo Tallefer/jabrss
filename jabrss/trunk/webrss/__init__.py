@@ -65,7 +65,7 @@ def format_timestamp(ts):
     return '%d days ago' % (diff // 86400,)
 
 
-def feed(url, translate_urls=False, reqprefix='', db=None,
+def feed(url, translate_urls=False, db=None,
          templ=app.jinja_env.get_template('feed.html')):
     now = int(time.time())
     if db == None:
@@ -144,7 +144,6 @@ def feed(url, translate_urls=False, reqprefix='', db=None,
             item.link = lnk
 
     return (resource.id(), templ.render(rid=resource.id(), url=resource.url(),
-                                        reqprefix=reqprefix,
                                         link=channel_info.link,
                                         title=channel_title,
                                         penalty=100*resource.penalty() / 1024,
@@ -155,7 +154,7 @@ def feed(url, translate_urls=False, reqprefix='', db=None,
 
 
 class ResourceIterator:
-    def __init__(self, urls, db, translate_urls, reqprefix):
+    def __init__(self, urls, db, translate_urls):
         self.__urls = urls[:]
         self.__iter = 0
         self.__now = int(time.time())
@@ -167,7 +166,6 @@ class ResourceIterator:
             self.__db = db
 
         self.__translate_urls = translate_urls
-        self.__reqprefix = reqprefix
 
     def __iter__(self):
         return self
@@ -179,22 +177,21 @@ class ResourceIterator:
             url = self.__urls[self.__iter]
             self.__iter += 1
 
-            rid, response = feed(url, self.__translate_urls,
-                                 self.__reqprefix, self.__db, self.__templ)
+            rid, response = feed(url, self.__translate_urls, self.__db,
+                                 self.__templ)
             return '<span style="display: block; overflow: hidden;" id="feed-%d">%s</span>' % (rid, response)
 
 
 @app.route('/url', methods=('POST',))
 def get_url():
     url = request.form['url']
-    reqprefix = request.form['reqprefix']
     translate_urls = ('m' in request.query_string)
     user_agent = request.headers.get('HTTP_USER_AGENT', None)
     if user_agent and not translate_urls:
         translate_urls = (user_agent.find(' NF-Browser/') != -1)
 
     try:
-        id, content = feed(url, translate_urls, reqprefix)
+        id, content = feed(url, translate_urls)
         response = current_app.response_class(content)
         response.headers['X-Feed-Id'] = '%d' % (id,)
     except UrlError, ue:
@@ -204,8 +201,8 @@ def get_url():
     return response
 
 @app.route('/r/<ids>', methods=('GET', 'POST'))
-def page(ids, reqprefix=''):
-    baseurl = request.url_root
+@app.route('/r/', methods=('GET', 'POST'))
+def page(ids=''):
     db = RSS_Resource_db()
     if ids:
         rids = map(lambda x: string.atoi(x), ids.split(','))
@@ -226,7 +223,7 @@ def page(ids, reqprefix=''):
             rids.append(resource.id())
 
         rids = map(lambda x: '%d' % (x,), rids)
-        raise RequestRedirect('%s%s%s' % (baseurl, 'r/', ','.join(rids)))
+        raise RequestRedirect(url_for('page', ids=','.join(rids)))
 
     translate_urls = ('m' in request.query_string)
     user_agent = request.headers.get('HTTP_USER_AGENT', None)
@@ -246,15 +243,12 @@ def page(ids, reqprefix=''):
 
     ridlist = ','.join(map(lambda x: '%d' % (x,), db_rids))
 
-    content_top = render_template('top.html', baseurl=baseurl,
-                                  rids=db_rids, ridlist=ridlist)
-    content_bottom = render_template('bottom.html', baseurl=baseurl,
-                                     reqprefix=reqprefix,
+    content_top = render_template('top.html', rids=db_rids, ridlist=ridlist)
+    content_bottom = render_template('bottom.html',
                                      rids=db_rids, ridlist=ridlist)
 
     content_iter = itertools.chain(iter((content_top,)),
-                                   ResourceIterator(urls, db, translate_urls,
-                                                    reqprefix),
+                                   ResourceIterator(urls, db, translate_urls),
                                    iter((content_bottom,)))
 
     response = current_app.response_class(content_iter)
@@ -262,4 +256,4 @@ def page(ids, reqprefix=''):
 
 @app.route('/', methods=('GET', 'POST'))
 def index():
-    return page('', 'r/')
+    raise RequestRedirect(url_for('page', ids=''))
