@@ -670,7 +670,7 @@ class JabberUser:
                 pass
 
             if jid_resource == '':
-                for res in self._jid_resources.keys():
+                for res in self._jid_resources.keys()[:]:
                     try:
                         del self._jid_resources[res]
                     except KeyError:
