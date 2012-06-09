@@ -1241,7 +1241,7 @@ def default_redirect_cb(redirect_url, db, redirect_count):
     return redirect_resource, redirects
 
 
-@total_ordering
+@functools.total_ordering
 class RSS_Resource:
     NR_ITEMS = 64
 
