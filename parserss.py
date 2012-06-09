@@ -18,7 +18,7 @@
 
 from __future__ import with_statement
 
-import codecs, hashlib, logging, random, re, socket, struct
+import codecs, functools, hashlib, logging, random, re, socket, struct
 import sys, time, threading, traceback, zlib
 import sqlite3
 
@@ -1241,6 +1241,7 @@ def default_redirect_cb(redirect_url, db, redirect_count):
     return redirect_resource, redirects
 
 
+@total_ordering
 class RSS_Resource:
     NR_ITEMS = 64
 
@@ -1301,6 +1302,13 @@ class RSS_Resource:
                 history_nr = filter(lambda x: x!=None, row[16:32])
                 self._history = list(zip(history_times, history_nr))
         del db
+
+
+    def __eq__(self, other):
+        return self._id == other._id
+
+    def __lt__(self, other):
+        return self._id < other._id
 
 
     def sync(self):
