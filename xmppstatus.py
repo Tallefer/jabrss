@@ -18,7 +18,7 @@
 
 from __future__ import with_statement
 
-import bisect, getopt, socket, ssl, sys, thread, threading, time
+import bisect, getopt, socket, ssl, sys, threading, time
 
 from getpass import getpass
 from xmpplify import Element, JID, Stanza, XmppStream
@@ -65,7 +65,7 @@ class StatusBot(XmppStream):
                 self._sock.settimeout(30)
                 self._sock.connect(ai[4])
                 break
-            except socket.error, e:
+            except socket.error(e):
                 exc = e
 
         if exc != None:
@@ -286,7 +286,7 @@ if JABBER_HOST == '':
     JABBER_HOST = JABBER_JID.domain()
 
 bot = StatusBot(JABBER_JID, JABBER_HOST, JABBER_PASSWORD)
-thread.start_new_thread(bot.run, ())
+threading.Thread(target=bot.run, args=())
 bot.connect()
 
 last_attempt = 0
