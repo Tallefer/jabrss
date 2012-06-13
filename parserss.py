@@ -1305,10 +1305,10 @@ class RSS_Resource:
 
 
     def __eq__(self, other):
-        return self._id == other._id
+        return (other != None) and (self._id == other._id)
 
     def __lt__(self, other):
-        return self._id < other._id
+        return (other != None) and (self._id < other._id)
 
 
     def sync(self):
