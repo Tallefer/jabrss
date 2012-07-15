@@ -65,7 +65,7 @@ class StatusBot(XmppStream):
                 self._sock.settimeout(30)
                 self._sock.connect(ai[4])
                 break
-            except socket.error, e:
+            except socket.error as e:
                 exc = e
 
         if exc != None:
