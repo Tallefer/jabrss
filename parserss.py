@@ -1485,7 +1485,7 @@ class RSS_Resource:
                     h.putheader('User-Agent', 'JabRSS (http://jabrss.cmeerw.org)')
                     if self._last_modified:
                         h.putheader('If-Modified-Since',
-                                    formatdate(self._last_modified))
+                                    formatdate(self._last_modified, usegmt=True))
                     if self._etag != None:
                         h.putheader('If-None-Match', self._etag)
                     h.endheaders()
