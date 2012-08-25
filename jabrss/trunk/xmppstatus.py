@@ -171,8 +171,9 @@ class StatusBot(XmppStream):
                 try:
                     tm = time.gmtime(time.time())
                     hours = b[1].split(':', 2)
-                    secs = reduce(lambda x, y: x*60 + y,
-                                  [int(v) for v in hours], 0)
+                    secs = 0
+                    for v in hours:
+                        secs += 60*secs + int(v)
                     secs *= 60**(3-len(hours))
                     ts = time.mktime(tm[0:3] + (0, 0, 0) + tm[6:]) + secs
                     if tm[8] == 1:
