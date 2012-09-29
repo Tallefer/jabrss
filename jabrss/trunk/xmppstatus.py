@@ -173,7 +173,7 @@ class StatusBot(XmppStream):
                     hours = b[1].split(':', 2)
                     secs = 0
                     for v in hours:
-                        secs += 60*secs + int(v)
+                        secs = 60*secs + int(v)
                     secs *= 60**(3-len(hours))
                     ts = time.mktime(tm[0:3] + (0, 0, 0) + tm[6:]) + secs
                     if tm[8] == 1:
@@ -287,7 +287,7 @@ if JABBER_HOST == '':
     JABBER_HOST = JABBER_JID.domain()
 
 bot = StatusBot(JABBER_JID, JABBER_HOST, JABBER_PASSWORD)
-threading.Thread(target=bot.run, args=())
+threading.Thread(target=bot.run, args=()).start()
 bot.connect()
 
 last_attempt = 0
