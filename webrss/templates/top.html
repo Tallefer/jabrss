@@ -1,7 +1,7 @@
 <html><head>
 <link type="text/css" rel="stylesheet" href="/media/webrss.css" />
 <script type="text/javascript">
-var rids = [{{ ridlist }}];
+var rids = ['{{ ridlist|join('\',\'')|safe }}'];
 </script>
 <script type="text/javascript" src="/media/mootools-core-1.4.5.js"></script>
 <script type="text/javascript" src="/media/webrss.js"></script>
