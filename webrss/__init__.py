@@ -28,7 +28,7 @@ from parserss import RSS_Resource_db, RSS_Resource_Cursor
 from parserss import UrlError, init_parserss
 
 app = Flask(__name__)
-app.debug = True
+app.debug = False
 
 base_dir = os.path.abspath(os.path.dirname(__file__))
 DB_FNAME = os.path.join(base_dir, 'webrss.db')
