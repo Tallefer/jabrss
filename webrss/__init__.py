@@ -149,8 +149,8 @@ def feed(url, db=None, templ=app.jinja_env.get_template('feed.html')):
 
 
 class ResourceIterator:
-    def __init__(self, urls, db):
-        self.__urls = urls[:]
+    def __init__(self, rids, db):
+        self.__rids = rids
         self.__iter = 0
         self.__now = int(time.time())
         self.__templ = app.jinja_env.get_template('feed.html')
@@ -164,14 +164,37 @@ class ResourceIterator:
         return self
 
     def next(self):
-        if self.__iter >= len(self.__urls):
+        while True:
+            if self.__iter >= len(self.__rids):
+                raise StopIteration()
+            else:
+                rid = self.__rids[self.__iter]
+                self.__iter += 1
+
+                try:
+                    url = RSS_Resource_id2url(rid, self.__db.cursor())
+                    rid, response = feed(url, self.__db, self.__templ)
+                    self.__rids[self.__iter - 1] = rid
+                    return '<span style="display: block; overflow: hidden;" class="rssfeed" id="feed-%s">%s</span>' % (format_rid(rid), response)
+                except KeyError:
+                    self.__rids[self.__iter - 1] = None
+
+
+class BottomIterator:
+    def __init__(self, rids):
+        self.__rids = rids
+        self.__iter = 0
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        if self.__iter:
             raise StopIteration()
         else:
-            url = self.__urls[self.__iter]
             self.__iter += 1
-
-            rid, response = feed(url, self.__db, self.__templ)
-            return '<span style="display: block; overflow: hidden;" id="feed-%s">%s</span>' % (format_rid(rid), response)
+            ridlist = map(format_rid, filter(lambda x: x != None, self.__rids))
+            return app.jinja_env.get_template('bottom.html').render(ridlist=ridlist)
 
 
 @app.route('/url', methods=('POST',))
@@ -210,29 +233,13 @@ def page(ids=''):
         if resource.id() not in rids:
             rids.append(resource.id())
 
-        rids = map(format_rid, rids)
-        raise RequestRedirect(url_for('page', ids=','.join(rids)))
+        ridlist = map(format_rid, rids)
+        raise RequestRedirect(url_for('page', ids=','.join(ridlist)))
 
-    db_rids = []
-    urls = []
-    for rid in rids:
-        try:
-            if rid not in db_rids:
-                url = RSS_Resource_id2url(rid, db.cursor())
-                db_rids.append(rid)
-                urls.append(url)
-        except KeyError:
-            pass
-
-    ridlist = map(format_rid, db_rids)
-
-    content_top = render_template('top.html', rids=db_rids, ridlist=ridlist)
-    content_bottom = render_template('bottom.html',
-                                     rids=db_rids, ridlist=ridlist)
-
+    content_top = render_template('top.html')
     content_iter = itertools.chain(iter((content_top,)),
-                                   ResourceIterator(urls, db),
-                                   iter((content_bottom,)))
+                                   ResourceIterator(rids, db),
+                                   BottomIterator(rids))
 
     response = current_app.response_class(content_iter)
     return response
