@@ -2,9 +2,13 @@
  * Copyright (C) 2008-2011, Christof Meerwald
  * http://cmeerw.org
  */
-function updateLinks(reqprefix) {
+function updateLinks(reqprefix, excRid) {
   var ridlist = '';
-  for (var i = 0; i < rids.length; i++) { ridlist += rids[i] + ','; }
+  var feeds = $$('span.rssfeed');
+  for (var i = 0; i < feeds.length; ++i) {
+    var rid = feeds[i].getAttribute('id').substr(5);
+    if (rid != excRid) ridlist += rid + ',';
+  }
   if (ridlist.length != 0) { ridlist = ridlist.substr(0, ridlist.length - 1); }
 
   var bookmark = $('bookmark');
@@ -18,11 +22,10 @@ function addFeed(reqprefix, url) {
     if (xmlHttp.readyState == 4) {
       var rid = xmlHttp.getResponseHeader('X-Feed-Id');
       if (rid) {
-        rids[rids.length] = rid;
-
         var feeds = $('feeds');
         var element = document.createElement('span');
         element.setAttribute('id', 'feed-' + rid);
+        element.setAttribute('class', 'rssfeed');
         element.style.display = 'block';
         element.style.overflow = 'hidden';
         element.style.position = 'absolute';
@@ -34,7 +37,7 @@ function addFeed(reqprefix, url) {
         element.style.visibility = '';
         element.style.position = '';
 
-        updateLinks(reqprefix);
+        updateLinks(reqprefix, '');
 
         var fx = new Fx.Morph(element,
                               { duration: 1000,
@@ -61,10 +64,7 @@ function delFeed(reqprefix, rid) {
   var element = $('feed-' + rid);
   var height = $(element).getSize().y;
 
-  var newrids = [];
-  for (var i = 0; i < rids.length; i++) { if (rids[i] != rid) newrids[newrids.length] = rids[i]; }
-  rids = newrids;
-  updateLinks(reqprefix);
+  updateLinks(reqprefix, rid);
 
   var fx = new Fx.Morph(element,
                         { duration: 1000,
