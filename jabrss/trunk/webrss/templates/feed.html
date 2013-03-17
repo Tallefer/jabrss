@@ -1,4 +1,4 @@
-<div class="resheader"><h2><a href="{{ link|escape }}">{{ title|escape }}</a> <span style="font-size: small; vertical-align: top;">[<span style="cursor: pointer;" onclick="delFeed('', {{ rid }}); return false;">X</span>]</span></h2>
+<div class="resheader"><h2><a href="{{ link|escape }}">{{ title|escape }}</a> <span style="font-size: small; vertical-align: top;">[<span style="cursor: pointer;" onclick="delFeed('', '{{ rid }}'); return false;">X</span>]</span></h2>
 <span class="resinfo">Resource <a href="{{ url }}">id {{ rid }}</a>, feed penalty: {{ penalty }} %<br />
 {% if updated %}updated: {{ updated }},{% endif %}
 polled: {{ polled }}

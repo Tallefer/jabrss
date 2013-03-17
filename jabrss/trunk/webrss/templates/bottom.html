@@ -1,9 +1,9 @@
 </span>
 <hr /><h1>Control</h1>
 <p>
-<form action="{{ ridlist }}" method="post" onsubmit="addFeed('', document.forms[0].elements['url'].value); document.forms[0].elements['url'].value=''; return false;">
+<form action="{{ ridlist|join(',') }}" method="post" onsubmit="addFeed('', document.forms[0].elements['url'].value); document.forms[0].elements['url'].value=''; return false;">
 <ul>
-<li><a id="bookmark" href="{{ ridlist }}">Bookmark URL</a></li>
+<li><a id="bookmark" href="{{ ridlist|join(',') }}">Bookmark URL</a></li>
 <li>URL: <input type="text" name="url" /> <input type="submit" value="Add" /></li>
 </ul></form></p>
 </body></html>

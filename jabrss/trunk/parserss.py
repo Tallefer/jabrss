@@ -1249,7 +1249,8 @@ class RSS_Resource:
     http_proxy = None
 
 
-    def __init__(self, url, res_db=None, connect_timeout=30, timeout=20):
+    def __init__(self, url, res_db=None, generate_id=None,
+                 connect_timeout=30, timeout=20):
         self._lock = threading.Lock()
         self._url = url
         self._url_protocol, self._url_host, self._url_path = split_url(url)
@@ -1275,9 +1276,23 @@ class RSS_Resource:
                 self._id, self._last_updated, self._last_modified, self._etag, self._invalid_since, self._redirect, self._redirect_seq, self._penalty, self._err_info, title, description, link = row
 
             if self._id == None:
-                cursor.execute('INSERT INTO resource (url) VALUES (?)',
-                               (self._url,))
-                self._id = cursor.lastrowid
+                if generate_id == None:
+                    cursor.execute('INSERT INTO resource (url) VALUES (?)',
+                                   (self._url,))
+                    self._id = cursor.lastrowid
+                else:
+                    for i in range(0, 5):
+                        try:
+                            id = generate_id()
+                            cursor.execute('INSERT INTO resource (rid, url) VALUES (?, ?)',
+                                           (id, self._url))
+                            self._id = id
+                            break
+                        except sqlite3.IntegrityError:
+                            pass
+
+                    if self._id == None:
+                        raise UrlError('Unable to add to database')
 
             if self._last_updated == None:
                 self._last_updated = 0

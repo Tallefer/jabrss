@@ -16,10 +16,7 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
-import fcntl, itertools, os, re, string, struct, time
-
-from array import array
-from urlparse import urlparse
+import itertools, os, random, time
 
 from flask import Flask, current_app, render_template, url_for
 from flask.globals import request
@@ -31,13 +28,47 @@ from parserss import RSS_Resource_db, RSS_Resource_Cursor
 from parserss import UrlError, init_parserss
 
 app = Flask(__name__)
-#app.debug = True
+app.debug = True
 
 base_dir = os.path.abspath(os.path.dirname(__file__))
 DB_FNAME = os.path.join(base_dir, 'webrss.db')
 init_parserss(db_fname = DB_FNAME,
               min_interval = 45*60, max_interval = 12*60*60,
               interval_div = 5)
+
+CHARSET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-*'
+
+
+def format_rid(rid):
+    s = ''
+    while rid:
+        s += CHARSET[rid % 64]
+        rid /= 64
+    return s
+
+def parse_rid(s):
+    rid, mult = 0, 1
+
+    for c in s:
+        val = 0
+        if c >= '0' and c <= '9':
+            val = ord(c) - ord('0')
+        elif c >= 'A' and c <= 'Z':
+            val = ord(c) - ord('A') + 10
+        elif c >= 'a' and c <= 'z':
+            val = ord(c) - ord('a') + 36
+        elif c == '-':
+            val = 62
+        elif c == '*':
+            val = 63
+
+        rid += val * mult
+        mult *= 64
+
+    return rid
+
+def generate_id():
+    return random.randint(0, 64**5)
 
 
 def format_timestamp(ts):
@@ -65,14 +96,13 @@ def format_timestamp(ts):
     return '%d days ago' % (diff // 86400,)
 
 
-def feed(url, translate_urls=False, db=None,
-         templ=app.jinja_env.get_template('feed.html')):
+def feed(url, db=None, templ=app.jinja_env.get_template('feed.html')):
     now = int(time.time())
     if db == None:
         db = RSS_Resource_db()
 
     while url != None:
-        resource = RSS_Resource(url, db)
+        resource = RSS_Resource(url, db, generate_id=generate_id)
         url, seq = resource.redirect_info(db)
 
     next_update = resource.next_update(False)
@@ -107,43 +137,8 @@ def feed(url, translate_urls=False, db=None,
     for item in items:
         item.published = format_timestamp(item.published)
 
-    if translate_urls:
-        cursor = db.cursor()
-
-        for item in items:
-            keep_going = True
-            lnk = item.link
-
-            while keep_going:
-                keep_going = False
-                hostname = urlparse(lnk).hostname
-
-                for pattern, replacement in cursor.execute('SELECT pattern, replacement FROM translate WHERE host=?', (hostname,)):
-                    mo = re.match(pattern, lnk)
-                    if mo:
-                        buf = []
-                        begpos = 0
-                        pos = replacement.find('%')
-                        while pos != -1:
-                            buf.append(replacement[begpos:pos])
-                            c = replacement[pos + 1]
-                            if c.isdigit():
-                                buf.append(mo.group(ord(c) - ord('0')))
-                            else:
-                                buf.append(c)
-
-                            begpos = pos + 2
-                            pos = replacement.find('%', begpos)
-
-                        buf.append(replacement[begpos:])
-                        buf = (''.join(buf)).encode('us-ascii')
-                        if lnk != buf:
-                            lnk = buf
-                            keep_going = True
-
-            item.link = lnk
-
-    return (resource.id(), templ.render(rid=resource.id(), url=resource.url(),
+    return (resource.id(), templ.render(rid=format_rid(resource.id()),
+                                        url=resource.url(),
                                         link=channel_info.link,
                                         title=channel_title,
                                         penalty=100*resource.penalty() / 1024,
@@ -154,7 +149,7 @@ def feed(url, translate_urls=False, db=None,
 
 
 class ResourceIterator:
-    def __init__(self, urls, db, translate_urls):
+    def __init__(self, urls, db):
         self.__urls = urls[:]
         self.__iter = 0
         self.__now = int(time.time())
@@ -164,8 +159,6 @@ class ResourceIterator:
             self.__db = RSS_Resource_db()
         else:
             self.__db = db
-
-        self.__translate_urls = translate_urls
 
     def __iter__(self):
         return self
@@ -177,23 +170,18 @@ class ResourceIterator:
             url = self.__urls[self.__iter]
             self.__iter += 1
 
-            rid, response = feed(url, self.__translate_urls, self.__db,
-                                 self.__templ)
-            return '<span style="display: block; overflow: hidden;" id="feed-%d">%s</span>' % (rid, response)
+            rid, response = feed(url, self.__db, self.__templ)
+            return '<span style="display: block; overflow: hidden;" id="feed-%s">%s</span>' % (format_rid(rid), response)
 
 
 @app.route('/url', methods=('POST',))
 def get_url():
     url = request.form['url']
-    translate_urls = ('m' in request.query_string)
-    user_agent = request.headers.get('HTTP_USER_AGENT', None)
-    if user_agent and not translate_urls:
-        translate_urls = (user_agent.find(' NF-Browser/') != -1)
 
     try:
-        id, content = feed(url, translate_urls)
+        id, content = feed(url)
         response = current_app.response_class(content)
-        response.headers['X-Feed-Id'] = '%d' % (id,)
+        response.headers['X-Feed-Id'] = format_rid(id)
     except UrlError, ue:
         response = current_app.response_class(str(ue))
         response.headers['X-Feed-Error'] = str(ue)
@@ -205,7 +193,7 @@ def get_url():
 def page(ids=''):
     db = RSS_Resource_db()
     if ids:
-        rids = map(lambda x: string.atoi(x), ids.split(','))
+        rids = map(parse_rid, ids.split(','))
     else:
         rids = []
     resources = []
@@ -216,19 +204,14 @@ def page(ids=''):
             raise NotFound()
 
         while url != None:
-            resource = RSS_Resource(url, db)
+            resource = RSS_Resource(url, db, generate_id)
             url, seq = resource.redirect_info(db)
 
         if resource.id() not in rids:
             rids.append(resource.id())
 
-        rids = map(lambda x: '%d' % (x,), rids)
+        rids = map(format_rid, rids)
         raise RequestRedirect(url_for('page', ids=','.join(rids)))
-
-    translate_urls = ('m' in request.query_string)
-    user_agent = request.headers.get('HTTP_USER_AGENT', None)
-    if user_agent and not translate_urls:
-        translate_urls = (user_agent.find(' NF-Browser/') != -1)
 
     db_rids = []
     urls = []
@@ -241,14 +224,14 @@ def page(ids=''):
         except KeyError:
             pass
 
-    ridlist = ','.join(map(lambda x: '%d' % (x,), db_rids))
+    ridlist = map(format_rid, db_rids)
 
     content_top = render_template('top.html', rids=db_rids, ridlist=ridlist)
     content_bottom = render_template('bottom.html',
                                      rids=db_rids, ridlist=ridlist)
 
     content_iter = itertools.chain(iter((content_top,)),
-                                   ResourceIterator(urls, db, translate_urls),
+                                   ResourceIterator(urls, db),
                                    iter((content_bottom,)))
 
     response = current_app.response_class(content_iter)
