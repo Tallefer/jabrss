@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<opml version="1.0">
+  <head>
+    <title>WebRSS Subscriptions</title>
+  </head>
+  <body>
+{% for item in items %}
+    <outline
+      text="{{ item.channel_info().descrtitle|escape }}"
+      title="{{ item.channel_info().title|escape }}"
+      type="rss"
+      xmlUrl="{{ item.url()|escape }}"
+      htmlUrl="{{ item.channel_info().link|escape }}"/>
+{% endfor %}
+  </body>
+</opml>
