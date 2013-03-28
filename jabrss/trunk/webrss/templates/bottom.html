@@ -1,9 +1,10 @@
 </span>
 <hr /><h1>Control</h1>
 <p>
-<form action="{{ ridlist|join(',') }}" method="post" onsubmit="addFeed('', document.forms[0].elements['url'].value); document.forms[0].elements['url'].value=''; return false;">
+<form action="../p/{{ ridlist|join(',') }}" method="post" onsubmit="addFeed('', document.forms[0].elements['url'].value); document.forms[0].elements['url'].value=''; return false;">
 <ul>
-<li><a id="bookmark" href="{{ ridlist|join(',') }}">Bookmark URL</a></li>
+<li><a id="bookmark" href="{{ ridlist|join(',') }}">Bookmark</a>,
+  <a href="../opml/{{ ridlist|join(',') }}/subscriptions.xml">OPML</a></li>
 <li>URL: <input type="text" name="url" /> <input type="submit" value="Add" /></li>
 </ul></form></p>
 </body></html>

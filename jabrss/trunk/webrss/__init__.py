@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (C) 2011, Christof Meerwald
+# Copyright (C) 2011-2013, Christof Meerwald
 # http://webrss.cmeerw.org
 
 # This program is free software; you can redistribute it and/or modify
@@ -221,21 +221,6 @@ def page(ids=''):
         rids = []
     resources = []
 
-    if request.method == 'POST':
-        url = request.form['url']
-        if not url:
-            raise NotFound()
-
-        while url != None:
-            resource = RSS_Resource(url, db, generate_id)
-            url, seq = resource.redirect_info(db)
-
-        if resource.id() not in rids:
-            rids.append(resource.id())
-
-        ridlist = map(format_rid, rids)
-        raise RequestRedirect(url_for('page', ids=','.join(ridlist)))
-
     content_top = render_template('top.html')
     content_iter = itertools.chain(iter((content_top,)),
                                    ResourceIterator(rids, db),
@@ -244,6 +229,53 @@ def page(ids=''):
     response = current_app.response_class(content_iter)
     return response
 
-@app.route('/', methods=('GET', 'POST'))
+@app.route('/p/<ids>', methods=('POST',))
+@app.route('/p/', methods=('POST',))
+def addurl(ids=''):
+    db = RSS_Resource_db()
+    if ids:
+        rids = map(parse_rid, ids.split(','))
+    else:
+        rids = []
+
+    url = request.form['url']
+    if not url:
+        raise NotFound()
+
+    while url != None:
+        resource = RSS_Resource(url, db, generate_id)
+        url, seq = resource.redirect_info(db)
+
+    if resource.id() not in rids:
+        rids.append(resource.id())
+
+    ridlist = map(format_rid, rids)
+    raise RequestRedirect(url_for('page', ids=','.join(ridlist)))
+
+@app.route('/opml/<ids>/subscriptions.xml')
+@app.route('/opml/subscriptions.xml')
+def opml(ids=''):
+    db = RSS_Resource_db()
+    if ids:
+        rids = map(parse_rid, ids.split(','))
+    else:
+        rids = []
+    items = []
+
+    for rid in rids:
+        try:
+            url = RSS_Resource_id2url(rid, db.cursor())
+            while url != None:
+                resource = RSS_Resource(url, db, generate_id=generate_id)
+                url, seq = resource.redirect_info(db)
+
+            items.append(resource)
+        except KeyError:
+            pass
+
+    response = current_app.response_class(render_template('subscriptions.xml', items=items), mimetype='application/xml')
+    return response
+
+@app.route('/')
 def index():
     raise RequestRedirect(url_for('page', ids=''))
