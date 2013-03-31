@@ -6,8 +6,9 @@
   <body>
 {% for item in items %}
     <outline
-      text="{{ item.channel_info().descrtitle|escape }}"
+      text="{{ item.channel_info().title|escape }}"
       title="{{ item.channel_info().title|escape }}"
+      description="{{ item.channel_info().descr|escape }}"
       type="rss"
       xmlUrl="{{ item.url()|escape }}"
       htmlUrl="{{ item.channel_info().link|escape }}"/>
