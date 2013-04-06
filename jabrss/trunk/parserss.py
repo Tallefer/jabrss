@@ -796,6 +796,9 @@ def html2plain(elem):
                 self.__buf.write('\n')
             self.__processed += 1
 
+        def handle_startendtag(self, tag, attrs):
+            return self.handle_starttag(tag, attr)
+
         def handle_endtag(self, tag):
             self.__processed += 1
 
@@ -1547,7 +1550,7 @@ class RSS_Resource:
                         l = response.read(4096)
                         while l:
                             bytes_received = bytes_received + len(l)
-                            if bytes_received > 512 * 1024:
+                            if bytes_received > 768 * 1024:
                                 raise ValueError('file exceeds maximum allowed size')
 
                             data = decoder.feed(l)
@@ -1559,7 +1562,7 @@ class RSS_Resource:
                                     xml_started = True
 
                             bytes_processed = bytes_processed + len(data)
-                            if bytes_processed > 1024 * 1024:
+                            if bytes_processed > 2 * 1024 * 1024:
                                 raise ValueError('file exceeds maximum allowed decompressed size')
 
                             rss_parser.feed(data)
