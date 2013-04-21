@@ -846,7 +846,7 @@ def typedtext(elem):
 class Feed_Parser:
     class Handler:
         def __init__(self):
-            self.__data, self.__elem, self.__last, self.__tail = [], [], None, None
+            self.__doctype, self.__data, self.__elem, self.__last, self.__tail = None, [], [], None, None
 
             self.__toplevel_handler = {
                 '{http://www.w3.org/2005/Atom}feed' :
