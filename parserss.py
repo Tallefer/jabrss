@@ -706,6 +706,10 @@ class FeedError(Exception):
     def __init__(self, e):
         Exception.__init__(self, e)
 
+class RetryAsHtml(Exception):
+    def __init__(self):
+        Exception.__init__(self)
+
 
 def findtag(parent, tags):
     elem = None
@@ -797,7 +801,7 @@ def html2plain(elem):
             self.__processed += 1
 
         def handle_startendtag(self, tag, attrs):
-            return self.handle_starttag(tag, attr)
+            return self.handle_starttag(tag, attrs)
 
         def handle_endtag(self, tag):
             self.__processed += 1
@@ -863,8 +867,7 @@ class Feed_Parser:
                 }
             self.__end_handler, self.__element_handler = None, {}
 
-            self.info = None
-            self.elements = []
+            self.redirect_url, self.info, self.elements = None, None, []
 
         def close(self):
             assert len(self.__elem) == 0, "missing end tags"
@@ -900,6 +903,10 @@ class Feed_Parser:
 
                 if handler:
                     handler(elem)
+                elif tag in ('html', '{http://www.w3.org/1999/xhtml}html'):
+                    raise RetryAsHtml()
+                elif self.__doctype == 'html':
+                    raise RetryAsHtml()
                 else:
                     raise FeedError('Unknown start tag %s' % (tag,))
 
@@ -1175,8 +1182,39 @@ class Feed_Parser:
                                       guid=guid, published=published))
             return False
 
+    class HtmlLinkParser(HTMLParser):
+        def __init__(self):
+            HTMLParser.__init__(self)
+            self.redirect_url, self.info, self.elements = None, None, []
+
+        def close(self):
+            HTMLParser.close(self)
+
+            if not self.redirect_url:
+                raise FeedError('No RSS autodiscovery links found in html')
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'link' and self.redirect_url == None:
+                dattrs = dict(attrs)
+                if (dattrs.get('rel') == 'alternate' and
+                    dattrs.get('type') in ('application/atom+xml', 'application/rdf+xml', 'application/rss+xml')):
+                    self.redirect_url = dattrs.get('href')
+                    self.info = Data(title=dattrs.get('title', ''),
+                                     descr='', link=self.redirect_url,
+                                     guid=None, published=None)
+            elif tag == 'body' and not self.redirect_url:
+                raise FeedError('No RSS autodiscovery links found in html')
+
+        def handle_startendtag(self, tag, attrs):
+            return self.handle_starttag(tag, attrs)
+
+        def handle_endtag(self, tag):
+            if tag == 'head' and not self.redirect_url:
+                raise FeedError('No RSS autodiscovery links found in html')
+
 
     def __init__(self, base_url):
+        self.__buf = []
         self.__base_url = base_url
         self.__handler = Feed_Parser.Handler()
         if hasattr(XMLParser, 'feed_error_log'):
@@ -1196,30 +1234,49 @@ class Feed_Parser:
     def get_items(self):
         return self.__handler.elements
 
+    def get_redirect_url(self):
+        return self.__handler.redirect_url
+
 
     def __resolve_link(self, url):
-        if url == None:
-            return '%s://%s%s' % (self.__base_url[0], self.__base_url[1],
-                                  self.__base_url[2])
-        elif url.startswith('/'):
-            return '%s://%s%s' % (self.__base_url[0], self.__base_url[1],
-                                  url)
-        else:
-            return url
+        return urljoin('%s://%s/%s' % (self.__base_url), url)
+
+    def __retry_as_html(self):
+        self.__handler = Feed_Parser.HtmlLinkParser()
+        self.__parser = self.__handler
+
+        for data in self.__buf:
+            self.__parser.feed(data.decode('iso8859-1'))
+        self.__buf = None
 
 
     def feed(self, data):
-        return self.__parser.feed(data)
+        try:
+            try:
+                res = self.__parser.feed(data)
+            finally:
+                if self.__buf != None:
+                    self.__buf.append(data)
+        except RetryAsHtml:
+            self.__retry_as_html()
 
     def close(self):
-        self.__parser.close()
-        elem = self.__handler.close()
+        try:
+            self.__parser.close()
+            elem = self.__handler.close()
+        except RetryAsHtml:
+            self.__retry_as_html()
+            elem = None
 
         info = self.__handler.info
         if info != None:
             info.link = self.__resolve_link(info.link)
         else:
             raise Exception('No feed information found')
+
+        redirect_url = self.__handler.redirect_url
+        if redirect_url != None:
+            self.__handler.redirect_url = self.__resolve_link(redirect_url)
 
         for item in self.__handler.elements:
             item.link = self.__resolve_link(item.link)
@@ -1576,24 +1633,30 @@ class RSS_Resource:
                         rss_parser.feed(data)
                         rss_parser.close()
 
-                        error_log = rss_parser.get_error_log()
-                        if error_log:
-                            logger.warn('XML parser error log:\n%s' % (error_log,))
+                        redirect_url = rss_parser.get_redirect_url()
+                        if redirect_url:
+                            logger.info('Following feed autodiscovery to "%s"' % (redirect_url,))
+                            url_protocol, url_host, url_path = split_url(redirect_url)
+                            redirect_tries = -redirect_tries
+                        else:
+                            error_log = rss_parser.get_error_log()
+                            if error_log:
+                                logger.warn('XML parser error log:\n%s' % (error_log,))
 
-                        new_channel_info = normalize_obj(rss_parser.get_info())
+                            new_channel_info = normalize_obj(rss_parser.get_info())
 
-                        hash_buffer = buffer(file_hash.digest())
-                        cursor.execute('UPDATE resource SET hash=? WHERE rid=? AND (hash IS NULL OR hash<>?)',
-                                       (hash_buffer, self._id, hash_buffer))
-                        feed_xml_changed = (cursor.rowcount != 0)
+                            hash_buffer = buffer(file_hash.digest())
+                            cursor.execute('UPDATE resource SET hash=? WHERE rid=? AND (hash IS NULL OR hash<>?)',
+                                           (hash_buffer, self._id, hash_buffer))
+                            feed_xml_changed = (cursor.rowcount != 0)
 
-                        self._update_channel_info(new_channel_info, cursor)
+                            self._update_channel_info(new_channel_info, cursor)
 
-                        new_items = [ normalize_item(x) for x in rss_parser.get_items() ]
-                        new_items.reverse()
+                            new_items = [ normalize_item(x) for x in rss_parser.get_items() ]
+                            new_items.reverse()
 
-                        items, first_item_id, nr_new_items = self._process_new_items(new_items, cursor)
-                        del new_items
+                            items, first_item_id, nr_new_items = self._process_new_items(new_items, cursor)
+                            del new_items
 
                     # handle "301 Moved Permanently", "302 Found" and
                     # "307 Temporary Redirect"
