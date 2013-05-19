@@ -34,13 +34,13 @@ except ImportError:
 
 if sys.version_info[0] == 2:
     import httplib
-    from HTMLParser import HTMLParser
+    from HTMLParser import HTMLParser, HTMLParseError
     from htmlentitydefs import name2codepoint
     from StringIO import StringIO
     from urlparse import urlsplit, urljoin
 else:
     import http.client as httplib
-    from html.parser import HTMLParser
+    from html.parser import HTMLParser, HTMLParseError
     from html.entities import name2codepoint
     from io import StringIO
     from urllib.parse import urlsplit, urljoin
@@ -1721,6 +1721,8 @@ class RSS_Resource:
                 error_info = 'encoding: ' + str(e)
             except ValueError as e:
                 error_info = 'misc: ' + str(e)
+            except HTMLParseError as e:
+                error_info = 'html: ' + str(e)
             except:
                 traceback.print_exc(file=sys.stdout)
 
