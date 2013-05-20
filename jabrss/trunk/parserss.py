@@ -319,6 +319,16 @@ def compare_items(l, r):
     else:
         return 0
 
+class CleanupOnError:
+    def __init__(self, callable=None):
+        self.__callable = callable
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.__callable != None and exc_type != None:
+            self.__callable()
 
 class Cursor:
     def __init__(self, dbconn, parent=None):
@@ -1786,48 +1796,53 @@ class RSS_Resource:
 
         nr_new_items = self._update_items(items, new_items)
         del new_items
+
         if nr_new_items:
             # we must not have any other objects locked when trying to lock
             # a resource
             cursor.commit()
             self.lock()
+            cleanup = CleanupOnError(self.unlock)
+        else:
+            cleanup = CleanupOnError()
 
-        cursor.begin()
-
-        if len(items) > RSS_Resource.NR_ITEMS:
-            first_item_id += len(items) - RSS_Resource.NR_ITEMS
-            del items[:-RSS_Resource.NR_ITEMS]
-            cursor.execute('DELETE FROM resource_data WHERE rid=? AND seq_nr<?',
-                           (self._id, first_item_id))
-
-        # RSS resource is valid
-        self._invalid_since = None
-
-        if nr_new_items:
-            # update history information
-            self._history.append((int(time.time()), nr_new_items))
-            self._history = self._history[-16:]
-
-            history_times = [ x[0] for x in self._history ]
-            if len(history_times) < 16:
-                history_times += (16 - len(history_times)) * [None]
-
-            history_nr = [ x[1] for x in self._history ]
-            if len(history_nr) < 16:
-                history_nr += (16 - len(history_nr)) * [None]
-
-            cursor.execute('INSERT INTO resource_history (rid, time_items0, time_items1, time_items2, time_items3, time_items4, time_items5, time_items6, time_items7, time_items8, time_items9, time_items10, time_items11, time_items12, time_items13, time_items14, time_items15, nr_items0, nr_items1, nr_items2, nr_items3, nr_items4, nr_items5, nr_items6, nr_items7, nr_items8, nr_items9, nr_items10, nr_items11, nr_items12, nr_items13, nr_items14, nr_items15) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                           tuple([self._id] + history_times + history_nr))
-
-            i = first_item_id
-            for item in items:
-                cursor.execute('INSERT INTO resource_data (rid, seq_nr, published, title, link, guid, descr_plain, descr_xhtml) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                               (self._id, i,
-                                item.published, item.title, item.link,
-                                item.guid, item.descr_plain, item.descr_xhtml))
-                i += 1
-
-        return items, first_item_id, nr_new_items
+        with cleanup:
+            cursor.begin()
+    
+            if len(items) > RSS_Resource.NR_ITEMS:
+                first_item_id += len(items) - RSS_Resource.NR_ITEMS
+                del items[:-RSS_Resource.NR_ITEMS]
+                cursor.execute('DELETE FROM resource_data WHERE rid=? AND seq_nr<?',
+                               (self._id, first_item_id))
+    
+            # RSS resource is valid
+            self._invalid_since = None
+    
+            if nr_new_items:
+                # update history information
+                self._history.append((int(time.time()), nr_new_items))
+                self._history = self._history[-16:]
+    
+                history_times = [ x[0] for x in self._history ]
+                if len(history_times) < 16:
+                    history_times += (16 - len(history_times)) * [None]
+    
+                history_nr = [ x[1] for x in self._history ]
+                if len(history_nr) < 16:
+                    history_nr += (16 - len(history_nr)) * [None]
+    
+                cursor.execute('INSERT INTO resource_history (rid, time_items0, time_items1, time_items2, time_items3, time_items4, time_items5, time_items6, time_items7, time_items8, time_items9, time_items10, time_items11, time_items12, time_items13, time_items14, time_items15, nr_items0, nr_items1, nr_items2, nr_items3, nr_items4, nr_items5, nr_items6, nr_items7, nr_items8, nr_items9, nr_items10, nr_items11, nr_items12, nr_items13, nr_items14, nr_items15) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                               tuple([self._id] + history_times + history_nr))
+    
+                i = first_item_id
+                for item in items:
+                    cursor.execute('INSERT INTO resource_data (rid, seq_nr, published, title, link, guid, descr_plain, descr_xhtml) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                                   (self._id, i,
+                                    item.published, item.title, item.link,
+                                    item.guid, item.descr_plain, item.descr_xhtml))
+                    i += 1
+    
+            return items, first_item_id, nr_new_items
 
 
     # @return nr_new_items
