@@ -19,7 +19,7 @@
 from __future__ import with_statement
 
 import base64, bisect, codecs, getopt, logging, os, ssl, socket
-import sqlite3, sys, threading, time, traceback, types
+import sqlite3, sys, threading, time, traceback
 
 from getpass import getpass
 from xmpplify import tobytes, Element, JID, Stanza, XmppStream
@@ -2153,12 +2153,16 @@ def console_handler(bot):
 
                 log_message('done dumping locked objects')
             elif s == 'debug resources':
-                resources = list(storage._resources.keys())
-                resources.sort()
+                resources = storage._resources.keys()
+                res_ids = list(filter(lambda x: type(x) == type(0), resources))
+                res_urls = list(filter(lambda x: type(x) != type(0), resources))
+                resources = res_ids + res_urls
                 log_message(repr(resources))
             elif s == 'debug users':
                 users = list(storage._users.keys())
-                users.sort()
+                users_ids = list(filter(lambda x: type(x) == type(0), users))
+                users_jids = list(filter(lambda x: type(x) != type(0), users))
+                users = users_ids + users_jids
                 log_message(repr(users))
             elif s.startswith('dump user '):
                 try:
