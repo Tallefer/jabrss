@@ -123,7 +123,9 @@ else:
     https_proxy = None
 
 RSS_Resource.http_proxy = http_proxy
-sqlite3.enable_shared_cache(True)
+if has_attr(sqlite3, 'enable_shared_cache'):
+    # non-standard, but useful
+    sqlite3.enable_shared_cache(True)
 
 
 def get_db():
