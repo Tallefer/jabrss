@@ -2153,11 +2153,11 @@ def console_handler(bot):
 
                 log_message('done dumping locked objects')
             elif s == 'debug resources':
-                resources = storage._resources.keys()
+                resources = list(storage._resources.keys())
                 resources.sort()
                 log_message(repr(resources))
             elif s == 'debug users':
-                users = storage._users.keys()
+                users = list(storage._users.keys())
                 users.sort()
                 log_message(repr(users))
             elif s.startswith('dump user '):
