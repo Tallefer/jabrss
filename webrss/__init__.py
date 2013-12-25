@@ -27,6 +27,8 @@ from parserss import RSS_Resource, RSS_Resource_id2url, RSS_Resource_simplify
 from parserss import RSS_Resource_db, RSS_Resource_Cursor
 from parserss import UrlError, init_parserss
 
+from urlrewriter import UrlRewriter
+
 app = Flask(__name__)
 app.debug = False
 
@@ -134,8 +136,10 @@ def feed(url, db=None, templ=app.jinja_env.get_template('feed.html')):
     items = items[-15:]
     items.reverse()
 
+    rewriter = UrlRewriter(os.path.join(base_dir, 'rewrite.db'))
     for item in items:
         item.published = format_timestamp(item.published)
+        item.link = rewriter.rewrite(item.link)
 
     return (resource.id(), templ.render(rid=format_rid(resource.id()),
                                         url=resource.url(),
