@@ -27,7 +27,7 @@ from parserss import RSS_Resource, RSS_Resource_id2url, RSS_Resource_simplify
 from parserss import RSS_Resource_db, RSS_Resource_Cursor
 from parserss import UrlError, init_parserss
 
-from urlrewriter import UrlRewriter
+from urlrewriter import NullRewriter, UrlRewriter
 
 app = Flask(__name__)
 app.debug = False
@@ -72,6 +72,12 @@ def parse_rid(s):
 def generate_id():
     return random.randint(0, 64**5)
 
+def get_rewriter(rewrite = False):
+    if rewrite:
+        return UrlRewriter(os.path.join(base_dir, 'rewrite.db'))
+    else:
+        return NullRewriter()
+
 
 def format_timestamp(ts):
     if ts == None:
@@ -98,7 +104,7 @@ def format_timestamp(ts):
     return '%d days ago' % (diff // 86400,)
 
 
-def feed(url, db=None, templ=app.jinja_env.get_template('feed.html')):
+def feed(url, rewriter, db=None, templ=app.jinja_env.get_template('feed.html')):
     now = int(time.time())
     if db == None:
         db = RSS_Resource_db()
@@ -136,7 +142,6 @@ def feed(url, db=None, templ=app.jinja_env.get_template('feed.html')):
     items = items[-15:]
     items.reverse()
 
-    rewriter = UrlRewriter(os.path.join(base_dir, 'rewrite.db'))
     for item in items:
         item.published = format_timestamp(item.published)
         item.link = rewriter.rewrite(item.link)
@@ -153,7 +158,7 @@ def feed(url, db=None, templ=app.jinja_env.get_template('feed.html')):
 
 
 class ResourceIterator:
-    def __init__(self, rids, db):
+    def __init__(self, rids, db, rewrite=False):
         self.__rids = rids
         self.__iter = 0
         self.__now = int(time.time())
@@ -163,6 +168,8 @@ class ResourceIterator:
             self.__db = RSS_Resource_db()
         else:
             self.__db = db
+
+        self.__rewriter = get_rewriter(rewrite)
 
     def __iter__(self):
         return self
@@ -177,7 +184,8 @@ class ResourceIterator:
 
                 try:
                     url = RSS_Resource_id2url(rid, self.__db.cursor())
-                    rid, response = feed(url, self.__db, self.__templ)
+                    rid, response = feed(url, self.__rewriter, self.__db,
+                                         self.__templ)
                     self.__rids[self.__iter - 1] = rid
                     return '<span style="display: block; overflow: hidden;" class="rssfeed" id="feed-%s">%s</span>' % (format_rid(rid), response)
                 except KeyError:
@@ -204,9 +212,10 @@ class BottomIterator:
 @app.route('/url', methods=('POST',))
 def get_url():
     url = request.form['url']
+    rewrite = request.form.get('rewrite', 'false') == 'true'
 
     try:
-        id, content = feed(url)
+        id, content = feed(url, get_rewriter(rewrite))
         response = current_app.response_class(content)
         response.headers['X-Feed-Id'] = format_rid(id)
     except UrlError, ue:
@@ -217,7 +226,7 @@ def get_url():
 
 @app.route('/r/<ids>', methods=('GET', 'POST'))
 @app.route('/r/', methods=('GET', 'POST'))
-def page(ids=''):
+def page(ids='', rewrite=False):
     db = RSS_Resource_db()
     if ids:
         rids = map(parse_rid, ids.split(','))
@@ -227,11 +236,16 @@ def page(ids=''):
 
     content_top = render_template('top.html')
     content_iter = itertools.chain(iter((content_top,)),
-                                   ResourceIterator(rids, db),
+                                   ResourceIterator(rids, db, rewrite),
                                    BottomIterator(rids))
 
     response = current_app.response_class(content_iter)
     return response
+
+@app.route('/R/<ids>', methods=('GET', 'POST'))
+@app.route('/R/', methods=('GET', 'POST'))
+def page_rewrite(ids=''):
+    return page(ids, True)
 
 @app.route('/p/<ids>', methods=('POST',))
 @app.route('/p/', methods=('POST',))
