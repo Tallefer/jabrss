@@ -126,28 +126,44 @@ def replace_captures(s, mo):
     return s
 
 
-class UrlRewriter:
+class NullRewriter:
+    def __init__(self):
+        pass
+
+    def rewrite(self, orig):
+        return orig
+
+
+class UrlRewriter(NullRewriter):
     def __init__(self, dbname = 'rewrite.db'):
+        NullRewriter.__init__(self)
         self.__db = sqlite3.Connection(dbname, 60000)
 
     def rewrite(self, orig):
-        url = urlsplit(orig)
-        host = url.netloc
+        loc = orig
 
-        for pattern, repl in self.__db.cursor().execute('SELECT pattern, replacement FROM host_rule WHERE hostname=?', (host,)):
-            if pattern[0] == '/':
-                pattern = 'http://[^/]+' + pattern
+        for i in range(0, 5):
+            oldloc = loc
+            url = urlsplit(loc)
+            host = url.netloc
 
-            mo = re.match(pattern_to_regex(pattern), orig)
-            if mo:
-                repl = replace_captures(repl, mo)
-                if repl[0] == '/':
-                    result = url.scheme + '://' + host + repl
-                else:
-                    result = repl
-                return result
+            for pattern, repl in self.__db.cursor().execute('SELECT pattern, replacement FROM host_rule WHERE hostname=?', (host,)):
+                if pattern[0] == '/':
+                    pattern = 'http://[^/]+' + pattern
 
-        return orig
+                mo = re.match(pattern_to_regex(pattern), loc)
+                if mo:
+                    repl = replace_captures(repl, mo)
+                    if repl[0] == '/':
+                        loc = url.scheme + '://' + host + repl
+                    else:
+                        loc = repl
+
+                    continue
+
+            break
+
+        return loc
 
 
 if __name__ == '__main__':
