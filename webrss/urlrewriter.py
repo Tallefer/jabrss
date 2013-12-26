@@ -121,7 +121,7 @@ def replace_captures(s, mo):
             repl = functions[fn](repl)
 
         s = s[:bpos] + repl + s[pos + 2:]
-        pos = bpos + len(repl) + 2
+        pos = bpos + len(repl)
 
     return s
 
