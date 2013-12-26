@@ -159,9 +159,10 @@ class UrlRewriter(NullRewriter):
                     else:
                         loc = repl
 
-                    continue
+                    break
 
-            break
+            if loc == oldloc:
+                break
 
         return loc
 
