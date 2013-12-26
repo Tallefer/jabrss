@@ -167,12 +167,9 @@ class UrlRewriter(NullRewriter):
 
 
 if __name__ == '__main__':
+    import sys
+
     rewriter = UrlRewriter()
 
-    print rewriter.rewrite('http://us.rd.yahoo.com/dailynews/rss/search/alcatel/SIG=11rko2bjs/*http%3A/itnews.com.au/newsstory.aspx?CIaNID=100183&r=rss')
-
-    print rewriter.rewrite('http://news.google.com/news/url?fd=R&sa=T&url=http://www.bloomberg.com/apps/news?pid=20601081&sid=aINYIR4Kurqg&usg=AFQjCNHva1BGQUJYWrMRK5z5xuigX7-7cA')
-
-    print rewriter.rewrite('http://feeds.washingtonpost.com/c/34656/f/636544/s/30251f8d/sc/11/l/0L0Swashingtonpost0N0Cblogs0Cthe0Eswitch0Cpost0Cuk0Egovernment0Ethought0Edestroying0Eguardian0Ehard0Edrives0Ewould0Estop0Esnowden0Estories0C20A130C0A80C190C5777e4d60E0A91e0E11e30E89fe0Eabb4a50A670A140Iblog0Bhtml0Dwprss0Frss0Itechnology/story01.htm')
-
-    print rewriter.rewrite('http://www.nytimes.com/aponline/2013/12/25/world/europe/ap-eu-spain-sanctuary-burns.html?partner=rss&emc=rss')
+    for url in sys.argv[1:]:
+        print '%s\n -> %s' % (url, rewriter.rewrite(url))
