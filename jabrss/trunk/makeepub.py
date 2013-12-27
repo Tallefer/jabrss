@@ -61,7 +61,7 @@ TOC_NCX = '''<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
   <head>
     <meta name="dtb:uid" content="%s"/>
-    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:depth" content="2"/>
     <meta name="dtb:totalPageCount" content="0"/>
     <meta name="dtb:maxPageNumber" content="0"/>
   </head>
@@ -73,6 +73,9 @@ TOC_NCX = '''<?xml version="1.0" encoding="UTF-8"?>
   </navMap>
 </ncx>
 '''
+
+def escape(s):
+    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 if sys.version_info[0] == 2:
@@ -175,7 +178,7 @@ for rss in args:
                       lxml.html.tostring(html, encoding='UTF-8',
                                          include_meta_content_type=True,
                                          method='xml', doctype=HTML_PREFIX))
-        pageinfo.append((pagename, item.title))
+        pageinfo.append((channel_info.title, pagename, item.title))
 
 db.close()
 del db
@@ -201,17 +204,31 @@ for url, fname in resources.items():
     resinfo.append((name, ext, ctype))
 
 
-manifest = [ '<item id="%s" href="%s.html" media-type="application/xhtml+xml"/>' % (name, name) for name, title in pageinfo ]
+manifest = [ '<item id="%s" href="%s.html" media-type="application/xhtml+xml"/>' % (name, name) for chtitle, name, title in pageinfo ]
 manifest += [ '<item id="%s" href="%s.%s" media-type="%s"/>' % (name, name, ext, ctype) for name, ext, ctype in resinfo ]
-spine_toc = [ '<itemref idref="%s" linear="yes"/>' % (name,) for name, title in pageinfo ]
+spine_toc = [ '<itemref idref="%s" linear="yes"/>' % (name,) for chtitle, name, title in pageinfo ]
 
-nav = [ '<navPoint id="n%s" playOrder="1"><navLabel><text>%s</text></navLabel><content src="%s.html"/></navPoint>' % (name, title, name) for name, title in pageinfo ]
+nr, oldchtitle, nav = 1, None, []
+for chtitle, name, title in pageinfo:
+    if oldchtitle != chtitle:
+        if oldchtitle != None:
+            nav.append('</navPoint>')
+        nav.append('<navPoint id="t%s" playOrder="%d"><navLabel><text>%s</text></navLabel><content src="%s.html"/>' % (name, nr, escape(chtitle), name))
+        oldchtitle = chtitle
+        nr += 1
+
+    nav.append('  <navPoint id="n%s" playOrder="%d"><navLabel><text>%s</text></navLabel><content src="%s.html"/></navPoint>' % (name, nr, escape(title), name))
+    nr += 1
+
+if oldchtitle != None:
+    nav.append('</navPoint>')
 
 epub.writestr('OPS/content.opf',
-              (CONTENT_OPF % (uid, ', '.join(rss_titles), ''.join(manifest),
-                              ''.join(spine_toc))).encode('utf-8'))
+              (CONTENT_OPF % (uid, ', '.join(rss_titles),
+                              '\n    '.join(manifest),
+                              '\n    '.join(spine_toc))).encode('utf-8'))
 epub.writestr('OPS/toc.ncx',
               (TOC_NCX % (uid, ', '.join(rss_titles),
-                          ''.join(nav))).encode('utf-8'))
+                          '\n    '.join(nav))).encode('utf-8'))
 
 epub.close()
