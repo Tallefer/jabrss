@@ -43,7 +43,7 @@ CONTENT_OPF = '''<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="id" version="2.0">
   <metadata xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="id">urn:uuid:%s</dc:identifier>
-    <dc:title>WebRSS: %s</dc:title>
+    <dc:title>%s</dc:title>
     <dc:creator opf:role="aut">WebRSS</dc:creator>
     <dc:publisher>webrss.cmeerw.net</dc:publisher>
     <dc:source>WebRSS</dc:source>
@@ -68,7 +68,7 @@ TOC_NCX = '''<?xml version="1.0" encoding="UTF-8"?>
     <meta name="dtb:maxPageNumber" content="0"/>
   </head>
   <docTitle>
-    <text>WebRSS: %s</text>
+    <text>%s</text>
   </docTitle>
   <navMap>
     %s
