@@ -100,7 +100,7 @@ class Null_Synchronizer:
 INTERVAL_DIVIDER = 3
 MIN_INTERVAL = 45*60
 MAX_INTERVAL = 24*60*60
-DB_FILENAME = 'jabrss_res.db'
+DB_FILENAME = 'parserss.db'
 
 def init_parserss(db_fname = DB_FILENAME,
                   min_interval = MIN_INTERVAL,

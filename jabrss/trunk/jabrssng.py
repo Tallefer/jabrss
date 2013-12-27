@@ -42,7 +42,7 @@ def log_message(*msg):
 
     logger.info(b' '.decode('ascii').join(data))
 
-init_parserss(dbsync_obj = threading.Lock())
+init_parserss(db_fname='jabrss_res.db', dbsync_obj=threading.Lock())
 
 
 TEXT_WELCOME = '''\
