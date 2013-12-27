@@ -48,9 +48,11 @@ CONTENT_OPF = '''<?xml version="1.0" encoding="UTF-8"?>
   </metadata>
   <manifest>
     %s
+    <item id="toc" href="toc.html" media-type="application/xhtml+xml"/>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
   </manifest>
   <spine toc="ncx">
+    <itemref idref="toc" linear="yes"/>
     %s
   </spine>
 </package>
@@ -72,6 +74,18 @@ TOC_NCX = '''<?xml version="1.0" encoding="UTF-8"?>
     %s
   </navMap>
 </ncx>
+'''
+
+
+TOC_HTML = HTML_PREFIX + '''
+<html>
+<head><title>WebRSS</title></head>
+<body>
+<h2>WebRSS</h2>
+<hr />
+%s
+</body>
+</html>
 '''
 
 def escape(s):
@@ -208,11 +222,12 @@ manifest = [ '<item id="%s" href="%s.html" media-type="application/xhtml+xml"/>'
 manifest += [ '<item id="%s" href="%s.%s" media-type="%s"/>' % (name, name, ext, ctype) for name, ext, ctype in resinfo ]
 spine_toc = [ '<itemref idref="%s" linear="yes"/>' % (name,) for chtitle, name, title in pageinfo ]
 
-nr, oldchtitle, nav = 1, None, []
+nr, oldchtitle, nav, toc = 1, None, [], []
 for chtitle, name, title in pageinfo:
     if oldchtitle != chtitle:
         if oldchtitle != None:
             nav.append('</navPoint>')
+        toc.append('<h3><a href="%s.html">%s</a></h3>' % (name, escape(chtitle)))
         nav.append('<navPoint id="t%s" playOrder="%d"><navLabel><text>%s</text></navLabel><content src="%s.html"/>' % (name, nr, escape(chtitle), name))
         oldchtitle = chtitle
         nr += 1
@@ -223,12 +238,15 @@ for chtitle, name, title in pageinfo:
 if oldchtitle != None:
     nav.append('</navPoint>')
 
+epub.writestr('OPS/toc.html',
+              (TOC_HTML % ('\n  '.join(toc),)).encode('utf-8'))
+
 epub.writestr('OPS/content.opf',
-              (CONTENT_OPF % (uid, ', '.join(rss_titles),
+              (CONTENT_OPF % (uid, escape(', '.join(rss_titles)),
                               '\n    '.join(manifest),
                               '\n    '.join(spine_toc))).encode('utf-8'))
 epub.writestr('OPS/toc.ncx',
-              (TOC_NCX % (uid, ', '.join(rss_titles),
+              (TOC_NCX % (uid, escape(', '.join(rss_titles)),
                           '\n    '.join(nav))).encode('utf-8'))
 
 epub.close()
