@@ -111,7 +111,7 @@ for optname, optval in opts:
         epubname = optval
     elif optname in ('-r', '--rewrite-db'):
         rewrite_db = optval
-    elif optname in ('-u', '--rewrite-db'):
+    elif optname in ('-u', '--user-agent'):
         http_headers['User-Agent'] = optval
 
 
