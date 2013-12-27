@@ -26,8 +26,6 @@ from urlrewriter import UrlRewriter
 from zipfile import ZipFile, ZIP_STORED, ZIP_DEFLATED
 
 
-HTTP_HEADERS = { 'User-Agent' : 'Lynx/2 (Linux; U; Android; en-us;) Mobile' }
-
 HTML_PREFIX = '''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">'''
 
@@ -102,9 +100,10 @@ uid = str(uuid.uuid4())
 age = 12
 epubname = uid + '.epub'
 rewrite_db = 'rewrite.db'
+http_headers = {}
 
-opts, args = getopt.getopt(sys.argv[1:], 'a:o:r:',
-                           ['age=', 'output=', 'rewrite-db='])
+opts, args = getopt.getopt(sys.argv[1:], 'a:o:r:u:',
+                           ['age=', 'output=', 'rewrite-db=', 'user-agent='])
 for optname, optval in opts:
     if optname in ('-a', '--age'):
         age = int(optval)
@@ -112,6 +111,8 @@ for optname, optval in opts:
         epubname = optval
     elif optname in ('-r', '--rewrite-db'):
         rewrite_db = optval
+    elif optname in ('-u', '--rewrite-db'):
+        http_headers['User-Agent'] = optval
 
 
 init_parserss()
@@ -148,7 +149,7 @@ for rss in args:
 
         opener = urllib2.build_opener(urllib2.HTTPCookieProcessor())
         try:
-            f = opener.open(urllib2.Request(url, None, HTTP_HEADERS))
+            f = opener.open(urllib2.Request(url, None, http_headers))
         except urllib2.URLError as e:
             print url, e
             continue
