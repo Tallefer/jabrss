@@ -16,9 +16,12 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
-import re, sqlite3
+import re, sqlite3, sys
 
-from urlparse import urlsplit, urljoin
+if sys.version_info[0] == 2:
+    from urlparse import urlsplit, urljoin
+else:
+    from urllib.parse import urlsplit, urljoin
 
 re_fncall = re.compile('%(([{][a-z]+[}])+)[1-9]')
 
@@ -173,4 +176,4 @@ if __name__ == '__main__':
     rewriter = UrlRewriter()
 
     for url in sys.argv[1:]:
-        print '%s\n -> %s' % (url, rewriter.rewrite(url))
+        print('%s\n -> %s' % (url, rewriter.rewrite(url)))
