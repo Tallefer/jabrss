@@ -16,7 +16,14 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
-import codecs, getopt, locale, logging, sys, time, urllib2, uuid
+import codecs, getopt, locale, logging, sys, time, uuid
+
+if sys.version_info[0] == 2:
+    import urllib2 as urlreq
+    from urllib2 import URLError
+else:
+    import urllib.request as urlreq
+    from urllib.error import URLError
 
 import lxml.html
 
@@ -164,12 +171,12 @@ for rss in args:
             continue
         visited[url] = True
 
-        opener = urllib2.build_opener(urllib2.HTTPCookieProcessor())
+        opener = urlreq.build_opener(urlreq.HTTPCookieProcessor())
         try:
             http_headers['Referer'] = url
-            f = opener.open(urllib2.Request(url, None, http_headers))
-        except urllib2.URLError as e:
-            print url, e
+            f = opener.open(urlreq.Request(url, None, http_headers))
+        except URLError as e:
+            logger.info('%s: %s' % (url, str(e)))
             continue
 
         html = lxml.html.document_fromstring(f.read())
@@ -202,12 +209,15 @@ del db
 resinfo = []
 for url, fname in resources.items():
     try:
-        f = urllib2.urlopen(urllib2.Request(url))
-    except urllib2.URLError as e:
-        print url, e
+        f = urlreq.urlopen(urlreq.Request(url))
+    except URLError as e:
+        logger.info('%s: %s' % (url, str(e)))
         continue
 
-    ctype = f.info().gettype()
+    if hasattr(f.info(), 'get_content_type'):
+        ctype = f.info().get_content_type()
+    else:
+        ctype = f.info().gettype()
     name, ext = fname.split('.')
 
     if ctype.startswith('image/'):
