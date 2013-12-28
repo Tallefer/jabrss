@@ -179,7 +179,19 @@ for rss in args:
             logger.info('%s: %s' % (url, str(e)))
             continue
 
-        html = lxml.html.document_fromstring(f.read())
+        data = f.read()
+        if hasattr(f.info(), 'get_content_charset'):
+            charset = f.info().get_content_charset()
+        else:
+            charset = f.info().getparam('charset')
+
+        if charset:
+            try:
+                data = data.decode(charset)
+            except:
+                pass
+
+        html = lxml.html.document_fromstring(data)
         html.make_links_absolute(url)
 
         html = html_cleaner.clean_html(html)
