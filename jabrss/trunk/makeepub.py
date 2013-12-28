@@ -166,6 +166,7 @@ for rss in args:
 
         opener = urllib2.build_opener(urllib2.HTTPCookieProcessor())
         try:
+            http_headers['Referer'] = url
             f = opener.open(urllib2.Request(url, None, http_headers))
         except urllib2.URLError as e:
             print url, e
