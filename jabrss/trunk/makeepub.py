@@ -29,12 +29,21 @@ import lxml.html
 
 from lxml.html.clean import Cleaner
 from parserss import init_parserss, RSS_Resource, RSS_Resource_db
+from extract_content import extract_content
 from urlrewriter import UrlRewriter
 from zipfile import ZipFile, ZIP_STORED, ZIP_DEFLATED
 
 
 HTML_PREFIX = '''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">'''
+
+PAGE_PREFIX = '''<html xmlns="http://www.w3.org/1999/xhtml">
+<meta http-equiv="Content-Type" content="application/xhtml+xml"/>
+<head><title>%s</title></head>
+<body><div>
+'''
+
+PAGE_SUFFIX = '</div></body></html>'
 
 CONTAINER_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
@@ -110,9 +119,9 @@ logger = logging.getLogger()
 logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.DEBUG)
 
-html_cleaner = Cleaner(scripts=True, javascript=False, comments=True,
-                       style=False, links=True, meta=True,
-                       page_structure=False,
+html_cleaner = Cleaner(scripts=True, javascript=True, comments=True,
+                       style=True, links=True, meta=True,
+                       page_structure=True,
                        processing_instructions=True, embedded=True,
                        frames=True, forms=True, annoying_tags=True,
                        remove_unknown_tags=True, safe_attrs_only=True,
@@ -194,24 +203,29 @@ for rss in args:
         html = lxml.html.document_fromstring(data)
         html.make_links_absolute(url)
 
-        html = html_cleaner.clean_html(html)
-        html.set('xmlns', 'http://www.w3.org/1999/xhtml')
+        content = []
+        for frag in extract_content(html):
+            frag = html_cleaner.clean_html(frag)
 
-        for element, attribute, link, pos in html.iterlinks():
-            if element.tag in ('a',):
-                pass
-            elif element.tag in ('img',) and attribute == 'src':
-                resname = resources.get(link, 'i%03d.img' % (len(resources) + 1,))
-                resources[link] = resname
-                element.set(attribute, resname)
-            elif attribute:
-                element.drop_tree()
+            for elem, attribute, link, pos in frag.iterlinks():
+                if elem.tag in ('a',):
+                    pass
+                elif elem.tag in ('img',) and attribute == 'src':
+                    resname = resources.get(link, 'i%03d.img' % (len(resources) + 1,))
+                    resources[link] = resname
+                    elem.set(attribute, resname)
+                elif attribute:
+                    elem.drop_tree()
+
+            content.append(lxml.html.tostring(frag, encoding='utf-8',
+                                              method='xml'))
 
         pagename = 'p%03d' % (len(pageinfo) + 1,)
         epub.writestr('OPS/%s.html' % (pagename,),
-                      lxml.html.tostring(html, encoding='UTF-8',
-                                         include_meta_content_type=True,
-                                         method='xml', doctype=HTML_PREFIX))
+                      (HTML_PREFIX +
+                       PAGE_PREFIX % (item.title,)).encode('utf-8') +
+                      b''.join(content) +
+                      PAGE_SUFFIX.encode('utf-8'))
         pageinfo.append((channel_info.title, pagename, item.title))
 
 db.close()
