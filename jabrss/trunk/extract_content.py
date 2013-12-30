@@ -19,14 +19,6 @@
 import lxml.html
 
 
-def find_enclosing(elem):
-    while elem.getparent() is not None and len(elem.getparent()) == 1:
-        elem = elem.getparent()
-    return elem
-
-def find_real_parent(elem):
-    return find_enclosing(elem.getparent())
-
 def remove_after(elem):
     parent = elem.getparent()
     while parent is not None:
@@ -48,7 +40,7 @@ def extract_content(html):
     topnodes = {}
 
     for p in html.iter('p'):
-        parent = find_real_parent(p)
+        parent = p.getparent()
         l = len(b' '.join(lxml.html.tostring(p, encoding='utf-8',
                                              method='text').split()))
         topnodes[parent] = topnodes.get(parent, 0) + l
@@ -98,14 +90,13 @@ def extract_content(html):
         elif p.tag not in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ol', 'p', 'table', 'ul'):
             continue
 
-        encl = find_enclosing(p)
         if p.tag.startswith('h'):
             towrite = True
             highesthdr = min(highesthdr, int(p.tag[1]))
         else:
             towrite = False
 
-        parent, i = encl.getparent(), nesting
+        encl, parent, i = p, p.getparent(), nesting
         while parent is not None and parent is not top:
             encl, parent = parent, parent.getparent()
             i -= 1
@@ -136,9 +127,8 @@ def extract_content(html):
             pass
 
         if elem is not None:
-            encl = find_enclosing(elem)
-            encl.tail = ''
-            headers.append(encl)
+            elem.tail = ''
+            headers.append(elem)
             remove_before(elem)
             elem.getparent().remove(elem)
             lowesthdr = i
@@ -148,10 +138,9 @@ def extract_content(html):
     if lowesthdr:
         for elem in html.iter():
             if elem.tag in ('h2', 'h3', 'h4', 'h5', 'h6'):
-                encl = find_enclosing(elem)
-                encl.tail = ''
-                headers.append(encl)
-                encl.getparent().remove(encl)
+                elem.tail = ''
+                headers.append(elem)
+                elem.getparent().remove(elem)
 
         if parent is not None:
             for elem in parent:
