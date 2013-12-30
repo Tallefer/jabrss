@@ -171,7 +171,7 @@ for rss in args:
     rss_titles.append(channel_info.title)
 
     for item in items:
-        if item.published < now - age*60*60:
+        if item.published and item.published < now - age*60*60:
             continue
 
         url = rewriter.rewrite(item.link)
