@@ -220,11 +220,14 @@ for rss in args:
             content.append(lxml.html.tostring(frag, encoding='utf-8',
                                               method='xml'))
 
+        if not content:
+            continue
+
         pagename = 'p%03d' % (len(pageinfo) + 1,)
         epub.writestr('OPS/%s.html' % (pagename,),
                       (HTML_PREFIX +
                        PAGE_PREFIX % (item.title,)).encode('utf-8') +
-                      b''.join(content) +
+                      b'\n'.join(content) +
                       PAGE_SUFFIX.encode('utf-8'))
         pageinfo.append((channel_info.title, pagename, item.title))
 
