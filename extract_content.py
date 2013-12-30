@@ -54,6 +54,9 @@ def extract_content(html):
         topnodes[parent] = topnodes.get(parent, 0) + l
 
     toplist = list(topnodes.items())
+    if not toplist:
+        return []
+
     toplist.sort(key=lambda x: x[1], reverse=True)
 
     paths = {}
@@ -95,30 +98,35 @@ def extract_content(html):
         elif p.tag not in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ol', 'p', 'table', 'ul'):
             continue
 
-        encl, parent, towrite = find_enclosing(p), find_real_parent(p), False
-        for i in range(nesting):
-            if parent == None:
-                break
-            elif parent == top:
-                towrite = True
-                break
-
-            parent = parent.getparent()
-
+        encl = find_enclosing(p)
         if p.tag.startswith('h'):
             towrite = True
             highesthdr = min(highesthdr, int(p.tag[1]))
+        else:
+            towrite = False
+
+        parent, i = encl.getparent(), nesting
+        while parent is not None and parent is not top:
+            encl, parent = parent, parent.getparent()
+            i -= 1
+
+        if not towrite:
+            towrite = i > 0
 
         if towrite:
             if not visited.get(encl):
                 for elem in encl.iter():
                     visited[elem] = True
 
+                encl.tail = ''
                 content.append(encl)
 
     remove_after(top)
     if top.getparent() is not None:
-        top.getparent().remove(top)
+        parent = top.getparent()
+        parent.remove(top)
+    else:
+        parent = None
 
     lowesthdr, headers = None, []
 
@@ -128,15 +136,28 @@ def extract_content(html):
             pass
 
         if elem is not None:
-            headers.append(find_enclosing(elem))
+            encl = find_enclosing(elem)
+            encl.tail = ''
+            headers.append(encl)
             remove_before(elem)
+            elem.getparent().remove(elem)
             lowesthdr = i
             break
+
 
     if lowesthdr:
         for elem in html.iter():
             if elem.tag in ('h2', 'h3', 'h4', 'h5', 'h6'):
-                headers.append(find_enclosing(elem))
+                encl = find_enclosing(elem)
+                encl.tail = ''
+                headers.append(encl)
+                encl.getparent().remove(encl)
+
+        if parent is not None:
+            for elem in parent:
+                if type(elem.tag) == type(''):
+                    elem.tail = ''
+                    headers.append(elem)
 
     headers.extend(content)
     return headers
@@ -150,5 +171,4 @@ if __name__ == '__main__':
     for frag in extract_content(html):
         sys.stdout.buffer.write(lxml.html.tostring(frag, encoding='utf-8',
                                                    method='xml'))
-
-    sys.stdout.buffer.write(b'\n')
+        sys.stdout.buffer.write(b'\n')
