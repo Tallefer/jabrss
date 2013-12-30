@@ -45,40 +45,44 @@ def remove_before(elem):
 
 
 def extract_content(html):
-    parents = {}
+    topnodes = {}
 
     for p in html.iter('p'):
         parent = find_real_parent(p)
         l = len(b' '.join(lxml.html.tostring(p, encoding='utf-8',
                                              method='text').split()))
-        parents[parent] = parents.get(parent, 0) + l
+        topnodes[parent] = topnodes.get(parent, 0) + l
 
-    pl = list(parents.items())
-    pl.sort(key=lambda x: x[1], reverse=True)
+    toplist = list(topnodes.items())
+    toplist.sort(key=lambda x: x[1], reverse=True)
 
-    title = b''
-    visited = {}
+    paths = {}
+    for top, l in filter(lambda x: 2*x[1] >= toplist[0][1], toplist):
+        node, nesting = top.getparent(), 1
+        while node is not None:
+            info = paths.get(node, (0, 0))
+            paths[node] = (info[0] + 1, max(info[1], nesting))
+            node, nesting = node.getparent(), nesting + 1
 
-    top, nesting = pl[0][0], 1
+    pathlist = list(paths.items())
+    pathlist.sort(key=lambda x: x[1][0], reverse=True)
 
-    if len(pl) >= 2:
-        p1, p2 = pl[:2]
-        if p1[1] < 2*p2[1]:
-            parents, t1, t2 = {}, p1[0], p2[0]
+    maxp = pathlist[0][1][0]
+    if maxp > 1:
+        pathlist = list(filter(lambda x: x[1][0] >= (maxp + 1) // 2, pathlist))
+        pathlist.reverse()
 
-            while t1 is not None:
-                parents[t1] = True
-                t1 = t1.getparent()
-
-            while t2 is not None:
-                if parents.get(t2):
-                    top = t2
+        top, info = pathlist[0]
+        pathnr, nesting = info
+        if info[0] == maxp // 2:
+            for top, info in pathlist[1:]:
+                if info[0] != pathnr:
+                    pathnr, nesting = info
                     break
-                t2 = t2.getparent()
-                nesting += 1
+    else:
+        nesting = 1
 
-
-    highesthdr, content = 7, []
+    highesthdr, content, visited = 7, [], {}
 
     for p in top.iter():
         if p == top:
