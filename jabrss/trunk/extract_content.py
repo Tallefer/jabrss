@@ -16,8 +16,6 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
-import sys
-
 import lxml.html
 
 
@@ -137,3 +135,15 @@ def extract_content(html):
 
     headers.extend(content)
     return headers
+
+
+if __name__ == '__main__':
+    import sys
+
+    html = lxml.html.document_fromstring(sys.stdin.buffer.read())
+
+    for frag in extract_content(html):
+        sys.stdout.buffer.write(lxml.html.tostring(frag, encoding='utf-8',
+                                                   method='xml'))
+
+    sys.stdout.buffer.write(b'\n')
