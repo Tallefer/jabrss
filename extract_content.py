@@ -58,14 +58,14 @@ def extract_content(html):
 
     paths = {}
     for top, l in filter(lambda x: 2*x[1] >= toplist[0][1], toplist):
-        node, nesting = top.getparent(), 1
+        node, nesting = top.getparent(), 2
         while node is not None:
             info = paths.get(node, (0, 0))
             paths[node] = (info[0] + 1, max(info[1], nesting))
             node, nesting = node.getparent(), nesting + 1
 
     pathlist = list(paths.items())
-    pathlist.sort(key=lambda x: x[1][0], reverse=True)
+    pathlist.sort(key=lambda x: x[1], reverse=True)
 
     maxp = pathlist[0][1][0]
     if maxp > 1:
@@ -117,7 +117,8 @@ def extract_content(html):
                 content.append(encl)
 
     remove_after(top)
-    top.getparent().remove(top)
+    if top.getparent() is not None:
+        top.getparent().remove(top)
 
     lowesthdr, headers = None, []
 
