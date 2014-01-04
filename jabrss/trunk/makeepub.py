@@ -18,14 +18,7 @@
 
 import codecs, getopt, locale, logging, sys, time, uuid
 
-if sys.version_info[0] == 2:
-    import urllib2 as urlreq
-    from urllib2 import URLError
-else:
-    import urllib.request as urlreq
-    from urllib.error import URLError
-
-import lxml.html
+import lxml.html, requests
 
 from lxml.html.clean import Cleaner
 from parserss import init_parserss, RSS_Resource, RSS_Resource_db
@@ -147,6 +140,11 @@ for optname, optval in opts:
     elif optname in ('-u', '--user-agent'):
         http_headers['User-Agent'] = optval
 
+def get_http_session():
+    sess = requests.Session()
+    sess.headers.update(http_headers)
+    return sess
+
 
 init_parserss()
 db = RSS_Resource_db()
@@ -157,6 +155,7 @@ epub = ZipFile(epubname, 'w', ZIP_DEFLATED)
 epub.writestr('mimetype', 'application/epub+zip', ZIP_STORED)
 epub.writestr('META-INF/container.xml', CONTAINER_XML)
 
+sess = get_http_session()
 rss_titles, pageinfo, visited, resources = [], [], {}, {}
 
 for rss in args:
@@ -180,27 +179,14 @@ for rss in args:
             continue
         visited[url] = True
 
-        opener = urlreq.build_opener(urlreq.HTTPCookieProcessor())
         try:
-            http_headers['Referer'] = url
-            f = opener.open(urlreq.Request(url, None, http_headers))
-        except URLError as e:
+            sess.cookies = requests.cookies.RequestsCookieJar()
+            f = sess.get(url, headers = {'Cookie' : None, 'Referer' : url})
+        except requests.HTTPError as e:
             logger.info('%s: %s' % (url, str(e)))
             continue
 
-        data = f.read()
-        if hasattr(f.info(), 'get_content_charset'):
-            charset = f.info().get_content_charset()
-        else:
-            charset = f.info().getparam('charset')
-
-        if charset:
-            try:
-                data = data.decode(charset)
-            except:
-                pass
-
-        html = lxml.html.document_fromstring(data)
+        html = lxml.html.document_fromstring(f.text)
         html.make_links_absolute(url)
 
         content = []
@@ -236,25 +222,23 @@ del db
 
 
 resinfo = []
+
 for url, fname in resources.items():
     try:
-        f = urlreq.urlopen(urlreq.Request(url))
-    except URLError as e:
+        sess.cookies = requests.cookies.RequestsCookieJar()
+        f = sess.get(url, headers = {'Cookie' : None, 'Referer' : url})
+    except requests.HTTPError as e:
         logger.info('%s: %s' % (url, str(e)))
         continue
 
-    if hasattr(f.info(), 'get_content_type'):
-        ctype = f.info().get_content_type()
-    else:
-        ctype = f.info().gettype()
     name, ext = fname.split('.')
-
+    ctype = f.headers['content-type'].split(';')[0]
     if ctype.startswith('image/'):
         compr = ZIP_STORED
     else:
         compr = ZIP_DEFLATED
 
-    epub.writestr('OPS/%s.%s' % (name, ext), f.read(), compr)
+    epub.writestr('OPS/%s.%s' % (name, ext), f.content, compr)
     resinfo.append((name, ext, ctype))
 
 
