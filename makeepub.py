@@ -181,8 +181,8 @@ for rss in args:
 
         try:
             sess.cookies = requests.cookies.RequestsCookieJar()
-            f = sess.get(url, headers = {'Cookie' : None, 'Referer' : url})
-        except requests.HTTPError as e:
+            f = sess.get(url, headers = {'Referer' : url})
+        except requests.RequestException as e:
             logger.info('%s: %s' % (url, str(e)))
             continue
 
@@ -226,8 +226,8 @@ resinfo = []
 for url, fname in resources.items():
     try:
         sess.cookies = requests.cookies.RequestsCookieJar()
-        f = sess.get(url, headers = {'Cookie' : None, 'Referer' : url})
-    except requests.HTTPError as e:
+        f = sess.get(url, headers = {'Referer' : url})
+    except requests.RequestException as e:
         logger.info('%s: %s' % (url, str(e)))
         continue
 
