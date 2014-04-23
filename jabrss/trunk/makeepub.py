@@ -232,7 +232,7 @@ for url, fname in resources.items():
         continue
 
     name, ext = fname.split('.')
-    ctype = f.headers['content-type'].split(';')[0]
+    ctype = f.headers.get('content-type', '').split(';')[0]
     if ctype.startswith('image/'):
         compr = ZIP_STORED
     else:
