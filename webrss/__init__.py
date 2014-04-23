@@ -69,8 +69,11 @@ def parse_rid(s):
 
     return rid
 
-def generate_id():
-    return random.randint(0, 64**5)
+def get_generate_id():
+    random_id = random.SystemRandom()
+    return lambda: random_id.randint(0, 64**5)
+
+generate_id = get_generate_id()
 
 def get_rewriter(rewrite = False):
     if rewrite:
