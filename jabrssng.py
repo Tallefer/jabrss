@@ -245,7 +245,8 @@ class DataStorage:
         self._redirect_db = None
 
 
-    def _redirect_cb(self, redirect_url, db, redirect_count):
+    def _redirect_cb(self, redirect_url, db, redirect_count,
+                     generate_id, connect_timeout, timeout):
         redirect_resource = self.get_resource(redirect_url, db)
 
         # prevent resource from being evicted until redirect is processed
