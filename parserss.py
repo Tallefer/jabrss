@@ -1325,6 +1325,7 @@ class RSS_Resource:
         self._lock = threading.Lock()
         self._url = url
         self._url_protocol, self._url_host, self._url_path = split_url(url)
+        self._generate_id = generate_id
         self._connect_timeout, self._timeout = connect_timeout, timeout
 
         self._id = None
@@ -1499,7 +1500,7 @@ class RSS_Resource:
                     if redirect_permanent:
                         redirect_url = url_protocol + '://' + url_host + url_path
                         if redirect_url != self._url:
-                            redirect_resource, redirects = redirect_cb(redirect_url, db, -redirect_tries + 1, generate_id, connect_timeout, timeout)
+                            redirect_resource, redirects = redirect_cb(redirect_url, db, -redirect_tries + 1, self._generate_id, self._connect_timeout, self._timeout)
 
                             # only perform the redirect if target is valid
                             if redirect_resource._invalid_since:
