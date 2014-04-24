@@ -1294,10 +1294,11 @@ class Feed_Parser:
         return elem
 
 
-def default_redirect_cb(redirect_url, db, redirect_count):
+def default_redirect_cb(redirect_url, db, redirect_count,
+                        generate_id, connect_timeout, timeout):
     resource_url = RSS_Resource_simplify(redirect_url)
     while resource_url != None:
-        redirect_resource = RSS_Resource(resource_url, db)
+        redirect_resource = RSS_Resource(resource_url, db, generate_id, connect_timeout, timeout)
         resource_url, redirect_seq = redirect_resource.redirect_info(db)
 
     new_items, next_item_id, redirect_target, redirect_seq, redirects = redirect_resource.update(db, redirect_count)
@@ -1498,7 +1499,7 @@ class RSS_Resource:
                     if redirect_permanent:
                         redirect_url = url_protocol + '://' + url_host + url_path
                         if redirect_url != self._url:
-                            redirect_resource, redirects = redirect_cb(redirect_url, db, -redirect_tries + 1)
+                            redirect_resource, redirects = redirect_cb(redirect_url, db, -redirect_tries + 1, generate_id, connect_timeout, timeout)
 
                             # only perform the redirect if target is valid
                             if redirect_resource._invalid_since:
