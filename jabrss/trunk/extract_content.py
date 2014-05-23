@@ -39,11 +39,12 @@ def remove_before(elem):
 def extract_content(html):
     topnodes = {}
 
-    for p in html.iter('p'):
-        parent = p.getparent()
-        l = len(b' '.join(lxml.html.tostring(p, encoding='utf-8',
-                                             method='text').split()))
-        topnodes[parent] = topnodes.get(parent, 0) + l
+    for tag in ('p', 'dl', 'ol', 'ul'):
+        for p in html.iter(tag):
+            parent = p.getparent()
+            l = len(b' '.join(lxml.html.tostring(p, encoding='utf-8',
+                                                 method='text').split()))
+            topnodes[parent] = topnodes.get(parent, 0) + l
 
     toplist = list(topnodes.items())
     if not toplist:
@@ -87,7 +88,8 @@ def extract_content(html):
             parent = p.getparent()
             if parent != top:
                 p = parent
-        elif p.tag not in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ol', 'p', 'table', 'ul'):
+        elif p.tag not in ('dl', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                           'ol', 'p', 'table', 'ul'):
             continue
 
         if p.tag.startswith('h'):

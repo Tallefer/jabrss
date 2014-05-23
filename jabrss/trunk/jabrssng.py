@@ -413,7 +413,7 @@ class DataStorage:
 
             for res_id in user._res_ids:
                 try:
-                    storage.get_resource_by_id(res_id)
+                    storage.get_resource_by_id(res_id, main_res_db)
                 except:
                     log_message('caught exception loading resource', str(res_id), 'for new user')
                     traceback.print_exc(file=sys.stdout)
@@ -731,7 +731,7 @@ class JabberUser:
 
         # also update storage res->uid mapping
         with storage.resources_sync():
-            res_uids = storage.get_resource_uids(resource)
+            res_uids = storage.get_resource_uids(resource, db_cursor)
             try:
                 res_uids.remove(self.uid())
             except ValueError:
@@ -1203,7 +1203,7 @@ class JabRSSStream(XmppStream):
     def _process_list(self, stanza, user):
         reply_body = []
         for res_id in user.resources():
-            resource = storage.get_resource_by_id(res_id)
+            resource = storage.get_resource_by_id(res_id, main_res_db)
             res_updated, res_modified, res_invalid = resource.times()
             if res_invalid == None:
                 reply_body.append(resource.url())
@@ -1414,7 +1414,7 @@ class JabRSSStream(XmppStream):
 
         for url in args:
             try:
-                resource = storage.get_resource(url)
+                resource = storage.get_resource(url, main_res_db)
                 try:
                     url = resource.url()
                     user.add_resource(resource)
@@ -1576,7 +1576,7 @@ class JabRSSStream(XmppStream):
         log_message('deleting user\'s %s subscriptions: %s' % (jid.tostring(), repr(user.resources())))
         for res_id in user.resources():
             try:
-                resource = storage.get_resource_by_id(res_id)
+                resource = storage.get_resource_by_id(res_id, main_res_db)
                 resource.lock()
                 try:
                     try:
@@ -1667,7 +1667,7 @@ class JabRSSStream(XmppStream):
             subs = None
 
             for res_id in user.resources()[:]:
-                resource = storage.get_resource_by_id(res_id)
+                resource = storage.get_resource_by_id(res_id, main_res_db)
                 if subs != None:
                     subs.append(resource.url())
 
@@ -1692,7 +1692,8 @@ class JabRSSStream(XmppStream):
                                 pass
                             resource.unlock()
 
-                            resource = storage.get_resource(redirect_url, None,
+                            resource = storage.get_resource(redirect_url,
+                                                            main_res_db,
                                                             True, False)
                             try:
                                 user.add_resource(resource, redirect_seq)
