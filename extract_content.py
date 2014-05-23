@@ -35,18 +35,88 @@ def remove_before(elem):
 
         elem, parent = parent, parent.getparent()
 
+def categorise(n):
+    result = 0
+
+    if n.tag == 'img':
+        src = n.get('src', '')
+        if not src or src.find('?') != -1 or src.find('&') != -1 or src.find(';') != -1:
+            result = -3
+        else:
+            if n.get('width', None) and n.get('height', None):
+                width, height = int(n.get('width', '0')), int(n.get('height', '0'))
+                if width * height > 100*100:
+                    result = width * height
+                else:
+                    result = -3
+            else:
+                result += 4*(len(n.get('title', '')) + len(n.get('alt', '')))
+    elif n.tag in ('dd', 'dt', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'li', 'p'):
+        result = 10
+    elif n.tag in ('dl', 'ol', 'table', 'ul'):
+        result = 1
+    elif n.tag in ('a', 'b', 'br', 'em', 'i', 'div', 'small', 'span', 'strong',
+                   'tbody', 'td', 'thead', 'tr'):
+        result = 0
+    elif n.tag in ('blink', 'script'):
+        result = -3
+    else:
+        result = -1
+
+    return result
+
+def textlen(s):
+    l = 0, 0
+
+    if s:
+        words = s.split()
+        l = sum(map(len, words)), len(words) - 1
+
+    return l
+
+def valuate(p):
+    l, w, c = 0, 0, 0
+
+    if p.tag != 'p':
+        c += 3
+
+    for n in p.iter():
+        tl, tw = textlen(n.text)
+        l += tl
+        w += tw
+
+        if n != p:
+            tl, tw = textlen(n.tail)
+            l += tl
+            w += tw
+
+        val = categorise(n)
+        if val > 0:
+            l += val
+        else:
+            c -= val
+
+    return l, w, c
+
+def sumval(v1, v2):
+    return (v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2])
 
 def extract_content(html):
     topnodes = {}
 
     for tag in ('p', 'li', 'dd', 'dt'):
         for p in html.iter(tag):
-            parent = p.getparent()
-            l = len(b' '.join(lxml.html.tostring(p, encoding='utf-8',
-                                                 method='text').split()))
-            topnodes[parent] = topnodes.get(parent, 0) + l
+            parent, val = p.getparent(), valuate(p)
+            topnodes[parent] = sumval(topnodes.get(parent, (0, 0, 0)), val)
 
-    toplist = list(topnodes.items())
+    for p in html.iter('img'):
+        l = categorise(p)
+        if l > 0:
+            parent = p.getparent()
+            topnodes[parent] = sumval(topnodes.get(parent, (0, 0, 0)), (l, 1, 1))
+
+    toplist = list(map(lambda x: (x[0], 100*x[1][0]*x[1][1] // (x[1][2] + 5)),
+                       topnodes.items()))
     if not toplist:
         return []
 
@@ -89,13 +159,13 @@ def extract_content(html):
             else:
                 continue
 
-        if p.tag in ('img',):
+        if categorise(p) <= 0:
+            continue
+
+        if p.tag == 'img':
             parent = p.getparent()
             if parent != top:
                 p = parent
-        elif p.tag not in ('dl', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-                           'ol', 'p', 'table', 'ul'):
-            continue
 
         if p.tag.startswith('h'):
             towrite = True
