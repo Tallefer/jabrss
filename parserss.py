@@ -32,16 +32,16 @@ except ImportError:
     except ImportError:
         from xml.etree.ElementTree import Element, XMLParser
 
+from contenttools import html2plain
+
 if sys.version_info[0] == 2:
     import httplib
     from HTMLParser import HTMLParser, HTMLParseError
-    from htmlentitydefs import name2codepoint
     from StringIO import StringIO
     from urlparse import urlsplit, urljoin
 else:
     import http.client as httplib
     from html.parser import HTMLParser, HTMLParseError
-    from html.entities import name2codepoint
     from io import StringIO
     from urllib.parse import urlsplit, urljoin
     unichr = chr
@@ -772,73 +772,6 @@ def xml2plain(elem, buf):
 
     if elem.tail:
         buf.write(elem.tail)
-
-def html2plain(elem):
-    class HTML2Plain(HTMLParser):
-        def __init__(self):
-            HTMLParser.__init__(self)
-            self.__buf = StringIO()
-            self.__processed, self.__errors = 0, 0
-
-        def close(self):
-            HTMLParser.close(self)
-            text = self.__buf.getvalue()
-            self.__buf.close()
-
-            if self.__errors == 0 or self.__processed > 3*self.__errors:
-                return text
-            else:
-                return None
-
-        def handle_data(self, data):
-            self.__buf.write(data)
-
-        def handle_charref(self, name):
-            try:
-                self.__buf.write(unichr(int(name)))
-            except ValueError:
-                self.__errors += 1
-
-        def handle_entityref(self, name):
-            try:
-                self.__buf.write(unichr(name2codepoint[name]))
-            except KeyError:
-                self.__errors += 1
-
-        def handle_starttag(self, tag, attrs):
-            if tag in ('br', 'p'):
-                self.__buf.write('\n')
-            self.__processed += 1
-
-        def handle_startendtag(self, tag, attrs):
-            return self.handle_starttag(tag, attrs)
-
-        def handle_endtag(self, tag):
-            self.__processed += 1
-
-        def handle_comment(self, data):
-            self.__processed += 1
-
-        def unknown_decl(self, data):
-            self.__errors += 1
-
-    html, text = '', None
-    if elem != None:
-        try:
-            parser = HTML2Plain()
-            buf = StringIO()
-            xml2plain(elem, buf)
-            html = buf.getvalue()
-            buf.close()
-            parser.feed(html)
-            text = parser.close()
-        except:
-            pass
-
-    if text == None:
-        return html
-    else:
-        return text
 
 def typedtext(elem):
     if elem == None:

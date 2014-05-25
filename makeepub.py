@@ -20,9 +20,8 @@ import codecs, getopt, locale, logging, sys, time, uuid
 
 import lxml.html, requests
 
-from lxml.html.clean import Cleaner
 from parserss import init_parserss, RSS_Resource, RSS_Resource_db
-from extract_content import extract_content
+from contenttools import extract_content
 from urlrewriter import UrlRewriter
 from zipfile import ZipFile, ZIP_STORED, ZIP_DEFLATED
 
@@ -112,16 +111,6 @@ logger = logging.getLogger()
 logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.DEBUG)
 
-html_cleaner = Cleaner(scripts=True, javascript=True, comments=True,
-                       style=True, links=True, meta=True,
-                       page_structure=True,
-                       processing_instructions=True, embedded=True,
-                       frames=True, forms=True, annoying_tags=True,
-                       remove_unknown_tags=True, safe_attrs_only=True,
-                       add_nofollow=False,
-                       kill_tags=['noscript'])
-
-
 uid = str(uuid.uuid4())
 age = 12
 epubname = uid + '.epub'
@@ -191,8 +180,6 @@ for rss in args:
 
         content = []
         for frag in extract_content(html):
-            frag = html_cleaner.clean_html(frag)
-
             for elem, attribute, link, pos in frag.iterlinks():
                 if elem.tag in ('a',):
                     pass
