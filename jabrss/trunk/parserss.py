@@ -773,11 +773,26 @@ def xml2plain(elem, buf):
     if elem.tail:
         buf.write(elem.tail)
 
+def htmlelem2plain(elem):
+    html, text = '', None
+
+    if elem != None:
+        try:
+            buf = StringIO()
+            xml2plain(elem, buf)
+            html = buf.getvalue()
+            text = html2plain(html)
+        except:
+            pass
+
+    return text or html
+        
+
 def typedtext(elem):
     if elem == None:
         return ''
     if elem.get('type', None) == 'html':
-        return html2plain(elem)
+        return htmlelem2plain(elem)
     else:
         buf = StringIO()
         xml2plain(elem, buf)
@@ -1043,8 +1058,8 @@ class Feed_Parser:
                 else:
                     ns = ''
 
-                title = html2plain(channel.find(ns + 'title'))
-                descr = html2plain(channel.find(ns + 'description'))
+                title = htmlelem2plain(channel.find(ns + 'title'))
+                descr = htmlelem2plain(channel.find(ns + 'description'))
                 link = channel.findtext(ns + 'link')
                 guid = channel.get('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about', None)
                 published = parse_dateTime(channel.findtext('{http://purl.org/dc/elements/1.1/}date')) or \
@@ -1060,8 +1075,8 @@ class Feed_Parser:
             else:
                 ns = ''
 
-            title = html2plain(elem.find(ns + 'title'))
-            descr = html2plain(elem.find(ns + 'description'))
+            title = htmlelem2plain(elem.find(ns + 'title'))
+            descr = htmlelem2plain(elem.find(ns + 'description'))
             link = elem.findtext('{http://www.pheedo.com/namespace/pheedo}origLink') or \
                 elem.findtext('{http://rssnamespace.org/feedburner/ext/1.0}origLink') or \
                 elem.findtext(ns + 'link')

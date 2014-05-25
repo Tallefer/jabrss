@@ -118,6 +118,7 @@ def html2plain(html, ignore_errors=False):
         def unknown_decl(self, data):
             self.__errors += 1
 
+
     try:
         parser = HTML2Plain(ignore_errors)
         parser.feed(html)
@@ -125,10 +126,7 @@ def html2plain(html, ignore_errors=False):
     except:
         text = None
 
-    if text == None:
-        return html
-    else:
-        return text
+    return text or html
 
 
 def remove_after(elem):
@@ -355,9 +353,8 @@ if __name__ == '__main__':
 
     html = lxml.html.document_fromstring(sys.stdin.buffer.read())
 
-    content = []
     for frag in extract_content(html):
-        content.append(lxml.html.tostring(frag, encoding='utf-8', method='xml'))
+        content = lxml.html.tostring(frag, encoding='utf-8', method='xml').decode('utf-8')
+        sys.stdout.write(html2plain(content, True))
 
-    sys.stdout.write(html2plain(b'\n'.join(content).decode('utf-8')))
     sys.stdout.write('\n')
