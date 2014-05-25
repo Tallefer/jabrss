@@ -62,11 +62,15 @@ def html2plain(html, ignore_errors=False):
                 return None
 
         def handle_data(self, data):
-            if not self.__in_pre:
-                pre_space = (data[:1] in (' ', '\t', '\r', '\n')) and not self.__has_space
-                post_space = (data[-1:] in (' ', '\t', '\r', '\n'))
-                data = int(pre_space)*' ' + ' '.join(data.split()) + int(post_space)*' '
-                self.__has_space, self.__has_nl = post_space, False
+            if not self.__in_pre and data:
+                l = data.split()
+                if l:
+                    pre_space = not self.__has_space and (data[:1] in (' ', '\t', '\r', '\n'))
+                    post_space = (data[-1:] in (' ', '\t', '\r', '\n'))
+                    data = int(pre_space)*' ' + ' '.join(data.split()) + int(post_space)*' '
+                    self.__has_space, self.__has_nl = post_space, False
+                else:
+                    data = ''
 
             self.__buf.write(data)
 
@@ -149,7 +153,7 @@ def categorise(n):
     if n.tag == 'img':
         src = n.get('src', '')
         if not src or src.find('?') != -1 or src.find('&') != -1 or src.find(';') != -1:
-            result = -3
+            result = -5
         else:
             if n.get('width', None) and n.get('height', None):
                 width, height = int(n.get('width', '0')), int(n.get('height', '0'))
@@ -163,11 +167,16 @@ def categorise(n):
         result = 10
     elif n.tag in ('dl', 'ol', 'table', 'ul'):
         result = 1
+    elif n.tag == 'a':
+        if n.get('onclick', None):
+            result = -3
+        else:
+            result = 0
     elif n.tag in ('a', 'b', 'br', 'em', 'i', 'div', 'small', 'span', 'strong',
                    'tbody', 'td', 'thead', 'tr'):
         result = 0
     elif n.tag in ('blink', 'script'):
-        result = -3
+        result = -5
     else:
         result = -1
 
