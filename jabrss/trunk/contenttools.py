@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (C) 2013, Christof Meerwald
+# Copyright (C) 2013-2014, Christof Meerwald
 # http://jabrss.cmeerw.org
 
 # This program is free software; you can redistribute it and/or modify
@@ -16,7 +16,115 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA
 
+import sys
+
 import lxml.html
+from lxml.etree import Element, ElementTree
+from lxml.html.clean import Cleaner
+
+if sys.version_info[0] == 2:
+    from HTMLParser import HTMLParser
+    from htmlentitydefs import name2codepoint
+    from StringIO import StringIO
+else:
+    from html.parser import HTMLParser
+    from html.entities import name2codepoint
+    from io import StringIO
+    unichr = chr
+
+
+html_cleaner = Cleaner(scripts=True, javascript=True, comments=True,
+                       style=True, links=True, meta=True,
+                       page_structure=True,
+                       processing_instructions=True, embedded=True,
+                       frames=True, forms=True, annoying_tags=True,
+                       remove_unknown_tags=True, safe_attrs_only=True,
+                       add_nofollow=False,
+                       kill_tags=['noscript'])
+
+
+def html2plain(html, ignore_errors=False):
+    class HTML2Plain(HTMLParser):
+        def __init__(self, ignore_errors=False):
+            HTMLParser.__init__(self)
+            self.__buf = StringIO()
+            self.__processed, self.__errors, self.__ignore_errors = 0, 0, ignore_errors
+            self.__in_pre, self.__has_space, self.__has_nl = False, True, True
+
+        def close(self):
+            HTMLParser.close(self)
+            text = self.__buf.getvalue()
+            self.__buf.close()
+
+            if not self.__ignore_errors or self.__errors == 0 or self.__processed > 3*self.__errors:
+                return text
+            else:
+                return None
+
+        def handle_data(self, data):
+            if not self.__in_pre:
+                pre_space = (data[:1] in (' ', '\t', '\r', '\n')) and not self.__has_space
+                post_space = (data[-1:] in (' ', '\t', '\r', '\n'))
+                data = int(pre_space)*' ' + ' '.join(data.split()) + int(post_space)*' '
+                self.__has_space, self.__has_nl = post_space, False
+
+            self.__buf.write(data)
+
+        def handle_charref(self, name):
+            try:
+                self.handle_data(unichr(int(name)))
+            except ValueError:
+                self.__errors += 1
+
+        def handle_entityref(self, name):
+            try:
+                self.handle_data(unichr(name2codepoint[name]))
+            except KeyError:
+                self.__errors += 1
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ('br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7',
+                       'div', 'p', 'pre', 'tr'):
+                if not self.__has_nl:
+                    self.__buf.write('\n')
+                    self.__has_nl = True
+                if tag == 'pre':
+                    self.__in_pre = True
+            elif tag in ('li',):
+                if not self.__has_nl:
+                    self.__buf.write('\n')
+                self.__buf.write(' * ')
+                self.__has_nl = True
+            elif tag == 'img':
+                d = dict(attrs)
+                self.handle_data(d.get('alt', '') or d.get('title', ''))
+            self.__processed += 1
+
+        def handle_startendtag(self, tag, attrs):
+            return self.handle_starttag(tag, attrs)
+
+        def handle_endtag(self, tag):
+            if tag == 'pre':
+                self.__in_pre, self.__has_nl = False, False
+            self.__processed += 1
+
+        def handle_comment(self, data):
+            self.__processed += 1
+
+        def unknown_decl(self, data):
+            self.__errors += 1
+
+    try:
+        parser = HTML2Plain(ignore_errors)
+        parser.feed(html)
+        text = parser.close()
+    except:
+        text = None
+
+    if text == None:
+        return html
+    else:
+        return text
 
 
 def remove_after(elem):
@@ -46,7 +154,7 @@ def categorise(n):
             if n.get('width', None) and n.get('height', None):
                 width, height = int(n.get('width', '0')), int(n.get('height', '0'))
                 if width * height > 100*100:
-                    result = width * height
+                    result = width * height // 16
                 else:
                     result = -3
             else:
@@ -121,9 +229,13 @@ def extract_content(html):
         return []
 
     toplist.sort(key=lambda x: x[1], reverse=True)
+    if toplist[0][0].tag in ('dl', 'ol', 'ul'):
+        weighing = 4
+    else:
+        weighing = 2
 
     paths = {}
-    for top, l in filter(lambda x: 2*x[1] >= toplist[0][1], toplist):
+    for top, l in filter(lambda x: weighing*x[1] >= toplist[0][1], toplist):
         node, nesting = top.getparent(), 2
         while node is not None:
             info = paths.get(node, (0, 0))
@@ -226,7 +338,7 @@ def extract_content(html):
                     headers.append(elem)
 
     headers.extend(content)
-    return headers
+    return list(map(html_cleaner.clean_html, headers))
 
 
 if __name__ == '__main__':
@@ -234,7 +346,9 @@ if __name__ == '__main__':
 
     html = lxml.html.document_fromstring(sys.stdin.buffer.read())
 
+    content = []
     for frag in extract_content(html):
-        sys.stdout.buffer.write(lxml.html.tostring(frag, encoding='utf-8',
-                                                   method='xml'))
-        sys.stdout.buffer.write(b'\n')
+        content.append(lxml.html.tostring(frag, encoding='utf-8', method='xml'))
+
+    sys.stdout.write(html2plain(b'\n'.join(content).decode('utf-8')))
+    sys.stdout.write('\n')
