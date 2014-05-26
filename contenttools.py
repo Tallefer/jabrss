@@ -99,6 +99,10 @@ def html2plain(html, ignore_errors=False):
                     self.__buf.write('\n')
                 self.__buf.write(' * ')
                 self.__has_nl = True
+            elif tag in ('td',):
+                if not self.__has_space and not self.__has_nl:
+                    self.__buf.write(' ')
+                    self.__has_space, self.__has_nl = True, False
             elif tag == 'img':
                 d = dict(attrs)
                 self.handle_data(d.get('alt', '') or d.get('title', ''))
@@ -128,6 +132,30 @@ def html2plain(html, ignore_errors=False):
 
     return text or html
 
+def xml2plain(elem, buf):
+    if elem.text:
+        buf.write(elem.text)
+
+    for item in elem:
+        xml2plain(item, buf)
+
+    if elem.tail:
+        buf.write(elem.tail)
+
+def htmlelem2plain(elem):
+    html, text = '', None
+
+    if elem != None:
+        try:
+            buf = StringIO()
+            xml2plain(elem, buf)
+            html = buf.getvalue()
+            text = html2plain(html)
+        except:
+            pass
+
+    return text or html
+        
 
 def remove_after(elem):
     parent = elem.getparent()

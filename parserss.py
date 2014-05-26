@@ -32,7 +32,7 @@ except ImportError:
     except ImportError:
         from xml.etree.ElementTree import Element, XMLParser
 
-from contenttools import html2plain
+from contenttools import htmlelem2plain, html2plain, xml2plain
 
 if sys.version_info[0] == 2:
     import httplib
@@ -762,31 +762,6 @@ def findelem(l, attr=None, values=(), default=''):
 
     return elem
 
-
-def xml2plain(elem, buf):
-    if elem.text:
-        buf.write(elem.text)
-
-    for item in elem:
-        xml2plain(item, buf)
-
-    if elem.tail:
-        buf.write(elem.tail)
-
-def htmlelem2plain(elem):
-    html, text = '', None
-
-    if elem != None:
-        try:
-            buf = StringIO()
-            xml2plain(elem, buf)
-            html = buf.getvalue()
-            text = html2plain(html)
-        except:
-            pass
-
-    return text or html
-        
 
 def typedtext(elem):
     if elem == None:
