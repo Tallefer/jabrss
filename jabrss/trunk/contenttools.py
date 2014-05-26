@@ -377,12 +377,24 @@ def extract_content(html):
 
 
 if __name__ == '__main__':
-    import sys
+    import requests, sys
+    sess = requests.Session()
 
-    html = lxml.html.document_fromstring(sys.stdin.buffer.read())
+    for url in sys.argv[1:]:
+        if url == '-':
+            content, encoding = sys.stdin.buffer.read(), None
+        else:
+            req = sess.get(url)
+            content, encoding = req.content, req.encoding
 
-    for frag in extract_content(html):
-        content = lxml.html.tostring(frag, encoding='utf-8', method='xml').decode('utf-8')
-        sys.stdout.write(html2plain(content, True))
+        if encoding:
+            parser = lxml.html.HTMLParser(encoding=encoding)
+        else:
+            parser = None
+        html = lxml.html.document_fromstring(content, parser)
 
-    sys.stdout.write('\n')
+        for frag in extract_content(html):
+            content = lxml.html.tostring(frag, encoding='utf-8', method='xml').decode('utf-8')
+            sys.stdout.write(html2plain(content, True))
+
+        sys.stdout.write('\n')
