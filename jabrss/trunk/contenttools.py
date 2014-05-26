@@ -56,7 +56,7 @@ def html2plain(html, ignore_errors=False):
             text = self.__buf.getvalue()
             self.__buf.close()
 
-            if not self.__ignore_errors or self.__errors == 0 or self.__processed > 3*self.__errors:
+            if self.__ignore_errors or self.__errors == 0 or self.__processed > 3*self.__errors:
                 return text
             else:
                 return None
@@ -130,7 +130,10 @@ def html2plain(html, ignore_errors=False):
     except:
         text = None
 
-    return text or html
+    if text == None:
+        return html
+    else:
+        return text
 
 def xml2plain(elem, buf):
     if elem.text:
