@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (C) 2013, Christof Meerwald
+# Copyright (C) 2013-2014, Christof Meerwald
 # http://jabrss.cmeerw.org
 
 # This program is free software; you can redistribute it and/or modify
@@ -175,7 +175,11 @@ for rss in args:
             logger.info('%s: %s' % (url, str(e)))
             continue
 
-        html = lxml.html.document_fromstring(f.text)
+        if f.encoding:
+            parser = lxml.html.HTMLParser(encoding=f.encoding)
+        else:
+            parser = None
+        html = lxml.html.document_fromstring(f.content, parser)
         html.make_links_absolute(url)
 
         content = []
