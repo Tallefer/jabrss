@@ -91,18 +91,18 @@ def html2plain(html, ignore_errors=False):
                        'div', 'p', 'pre', 'tr'):
                 if not self.__has_nl:
                     self.__buf.write('\n')
-                    self.__has_nl = True
+                    self.__has_nl, self.__has_space = True, True
                 if tag == 'pre':
                     self.__in_pre = True
             elif tag in ('li',):
                 if not self.__has_nl:
                     self.__buf.write('\n')
                 self.__buf.write(' * ')
-                self.__has_nl = True
+                self.__has_nl, self.__has_space = False, True
             elif tag in ('td',):
                 if not self.__has_space and not self.__has_nl:
                     self.__buf.write(' ')
-                    self.__has_space, self.__has_nl = True, False
+                    self.__has_nl, self.__has_space = False, True
             elif tag == 'img':
                 d = dict(attrs)
                 self.handle_data(d.get('alt', '') or d.get('title', ''))
@@ -113,7 +113,7 @@ def html2plain(html, ignore_errors=False):
 
         def handle_endtag(self, tag):
             if tag == 'pre':
-                self.__in_pre, self.__has_nl = False, False
+                self.__in_pre, self.__has_nl, self.__has_space = False, False, True
             self.__processed += 1
 
         def handle_comment(self, data):
@@ -411,10 +411,10 @@ if __name__ == '__main__':
         html = lxml.html.document_fromstring(content, parser)
 
         for frag in extract_content(html):
-            content = lxml.html.tostring(frag, encoding='utf-8', method='xml').decode('utf-8')
+            content = lxml.html.tostring(frag, encoding='utf-8', method='html').decode('utf-8')
             if as_html:
                 sys.stdout.write(content)
             else:
                 sys.stdout.write(html2plain(content, True))
 
-        sys.stdout.write('\n')
+            sys.stdout.write('\n')
