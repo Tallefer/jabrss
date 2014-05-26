@@ -244,6 +244,13 @@ def valuate(p):
 def sumval(v1, v2):
     return (v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2])
 
+def clean_imgs(elem):
+    for n in elem.iter('img'):
+        if categorise(n) < 0:
+            n.clear()
+
+    return elem
+
 def extract_content(html):
     topnodes = {}
 
@@ -373,14 +380,24 @@ def extract_content(html):
                     headers.append(elem)
 
     headers.extend(content)
-    return list(map(html_cleaner.clean_html, headers))
+    return list(map(clean_imgs, map(html_cleaner.clean_html, headers)))
 
 
 if __name__ == '__main__':
-    import requests, sys
+    import getopt, requests, sys
+
+    as_html = False
+    opts, args = getopt.getopt(sys.argv[1:], 'ht', ['html', 'text'])
+
+    for optname, optval in opts:
+        if optname in ('-h', '--html'):
+            as_html = True
+        elif optname in ('-t', '--text'):
+            as_html = True
+
     sess = requests.Session()
 
-    for url in sys.argv[1:]:
+    for url in args:
         if url == '-':
             content, encoding = sys.stdin.buffer.read(), None
         else:
@@ -395,6 +412,9 @@ if __name__ == '__main__':
 
         for frag in extract_content(html):
             content = lxml.html.tostring(frag, encoding='utf-8', method='xml').decode('utf-8')
-            sys.stdout.write(html2plain(content, True))
+            if as_html:
+                sys.stdout.write(content)
+            else:
+                sys.stdout.write(html2plain(content, True))
 
         sys.stdout.write('\n')
