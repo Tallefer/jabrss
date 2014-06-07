@@ -246,6 +246,9 @@ def valuate(p):
 
     return l, w, c
 
+def getval(v):
+    return 100*v[0]*v[1] // (v[2] + 5)
+
 def sumval(v1, v2):
     return (v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2])
 
@@ -270,8 +273,7 @@ def extract_content(html):
             parent = p.getparent()
             topnodes[parent] = sumval(topnodes.get(parent, (0, 0, 0)), (l, 1, 1))
 
-    toplist = list(map(lambda x: (x[0], 100*x[1][0]*x[1][1] // (x[1][2] + 5)),
-                       topnodes.items()))
+    toplist = list(map(lambda x: (x[0], getval(x[1])), topnodes.items()))
     if not toplist:
         return []
 
@@ -296,7 +298,7 @@ def extract_content(html):
     pathlist.sort(key=lambda x: x[1])
     maxp = pathlist[-1][1][0]
 
-    if article != None:
+    if (article != None) and (10*valuate(top)[2] >= 8*valuate(article)[2]):
         top, nesting = article, artnesting
     else:
         if maxp > 1:
