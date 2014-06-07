@@ -98,7 +98,7 @@ def html2plain(html, ignore_errors=False):
                 if not self.__has_nl:
                     self.__buf.write('\n')
                 self.__buf.write(' * ')
-                self.__has_nl, self.__has_space = False, True
+                self.__has_nl, self.__has_space = True, True
             elif tag in ('td',):
                 if not self.__has_space and not self.__has_nl:
                     self.__buf.write(' ')
@@ -192,13 +192,15 @@ def categorise(n):
                     result = -3
             else:
                 result += 4*(len(n.get('title', '')) + len(n.get('alt', '')))
-    elif n.tag in ('dd', 'dt', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'li', 'p'):
+    elif n.tag in ('article', 'dd', 'dt', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'li', 'p'):
         result = 10
     elif n.tag in ('dl', 'ol', 'table', 'ul'):
         result = 1
     elif n.tag == 'a':
         if n.get('onclick', None):
-            result = -3
+            result = -5
+        elif n.get('href', '').startswith('http'):
+            result = -2
         else:
             result = 0
     elif n.tag in ('a', 'b', 'br', 'em', 'i', 'div', 'small', 'span', 'strong',
@@ -223,7 +225,7 @@ def textlen(s):
 def valuate(p):
     l, w, c = 0, 0, 0
 
-    if p.tag != 'p':
+    if p.tag not in ('p', 'article'):
         c += 3
 
     for n in p.iter():
@@ -279,31 +281,36 @@ def extract_content(html):
     else:
         weighing = 2
 
-    paths = {}
+    paths, article = {}, None
     for top, l in filter(lambda x: weighing*x[1] >= toplist[0][1], toplist):
         node, nesting = top.getparent(), 2
         while node is not None:
+            if node.tag == 'article':
+                article, artnesting = node, nesting
+
             info = paths.get(node, (0, 0))
             paths[node] = (info[0] + 1, max(info[1], nesting))
             node, nesting = node.getparent(), nesting + 1
 
     pathlist = list(paths.items())
-    pathlist.sort(key=lambda x: x[1], reverse=True)
+    pathlist.sort(key=lambda x: x[1])
+    maxp = pathlist[-1][1][0]
 
-    maxp = pathlist[0][1][0]
-    if maxp > 1:
-        pathlist = list(filter(lambda x: x[1][0] >= (maxp + 1) // 2, pathlist))
-        pathlist.reverse()
-
-        top, info = pathlist[0]
-        pathnr, nesting = info
-        if info[0] == maxp // 2:
-            for top, info in pathlist[1:]:
-                if info[0] != pathnr:
-                    pathnr, nesting = info
-                    break
+    if article != None:
+        top, nesting = article, artnesting
     else:
-        nesting = 1
+        if maxp > 1:
+            pathlist = list(filter(lambda x: x[1][0] >= (maxp + 1) // 2, pathlist))
+
+            top, info = pathlist[0]
+            pathnr, nesting = info
+            if info[0] == maxp // 2:
+                for top, info in pathlist[1:]:
+                    if info[0] != pathnr:
+                        pathnr, nesting = info
+                        break
+        else:
+            nesting = 1
 
     highesthdr, content, visited = 7, [], {}
 
