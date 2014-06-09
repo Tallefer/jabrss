@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (C) 2001-2011, Christof Meerwald
+# Copyright (C) 2001-2014, Christof Meerwald
 # http://jabrss.cmeerw.org
 
 # This program is free software; you can redistribute it and/or modify
@@ -21,6 +21,7 @@ from __future__ import with_statement
 import codecs, functools, hashlib, logging, random, re, socket, struct
 import sys, time, threading, traceback, zlib
 import sqlite3
+import requests
 
 from email.utils import formatdate, mktime_tz, parsedate_tz
 
@@ -35,12 +36,10 @@ except ImportError:
 from contenttools import htmlelem2plain, html2plain, xml2plain
 
 if sys.version_info[0] == 2:
-    import httplib
     from HTMLParser import HTMLParser, HTMLParseError
     from StringIO import StringIO
     from urlparse import urlsplit, urljoin
 else:
-    import http.client as httplib
     from html.parser import HTMLParser, HTMLParseError
     from io import StringIO
     from urllib.parse import urlsplit, urljoin
@@ -396,320 +395,6 @@ class Data:
     def __init__(self, **kw):
         for key, value in kw.items():
             setattr(self, key, value)
-
-
-class HTTPConnection(httplib.HTTPConnection):
-    def __init__(self, host, port=None, strict=None,
-                 timeout=socket.getdefaulttimeout(),
-                 read_timeout=socket.getdefaulttimeout()):
-        httplib.HTTPConnection.__init__(self, host, port=port)
-        self.timeout = timeout
-        self.__read_timeout = read_timeout
-
-    def __connect_v25(self):
-        for res in socket.getaddrinfo(self.host, self.port, 0,
-                                      socket.SOCK_STREAM):
-            af, socktype, proto, canonname, sa = res
-            try:
-                self.sock = socket.socket(af, socktype, proto)
-                self.sock.settimeout(self.timeout)
-                self.sock.connect(sa)
-            except socket.error as msg:
-                if self.sock:
-                    self.sock.close()
-                self.sock = None
-                continue
-            break
-        if not self.sock:
-            raise socket.error(msg)
-
-    def connect(self):
-        if sys.version_info >= (2, 6, 0):
-            httplib.HTTPConnection.connect(self)
-        else:
-            self.__connect_v25()
-        self.sock.settimeout(self.__read_timeout)
-
-    def putrequest(self, method, url):
-        self._http_vsn = 10
-        httplib.HTTPConnection.putrequest(self, method, url, True)
-        self._http_vsn = 11
-
-
-class HTTPSConnection(httplib.HTTPSConnection):
-    def __init__(self, host, port=None, strict=None,
-                 timeout=socket.getdefaulttimeout(),
-                 read_timeout=socket.getdefaulttimeout()):
-        httplib.HTTPSConnection.__init__(self, host, port=port)
-        self.timeout = timeout
-        self.__read_timeout = read_timeout
-
-    def __connect_v25(self):
-        sock = None
-        for res in socket.getaddrinfo(self.host, self.port, 0,
-                                      socket.SOCK_STREAM):
-            af, socktype, proto, canonname, sa = res
-            try:
-                sock = socket.socket(af, socktype, proto)
-                sock.settimeout(self.timeout)
-                sock.connect(sa)
-            except socket.error as msg:
-                if sock:
-                    sock.close()
-                sock = None
-                continue
-            break
-        if not sock:
-            raise socket.error(msg)
-        else:
-            ssl = socket.ssl(sock, self.key_file, self.cert_file)
-            self.sock = httplib.FakeSocket(sock, ssl)
-
-    def connect(self):
-        if sys.version_info >= (2, 6, 0):
-            httplib.HTTPSConnection.connect(self)
-        else:
-            self.__connect_v25()
-        self.sock.settimeout(self.__read_timeout)
-
-    def putrequest(self, method, url):
-        self._http_vsn = 10
-        httplib.HTTPConnection.putrequest(self, method, url, True)
-        self._http_vsn = 11
-
-
-class DecompressorError(ValueError):
-    pass
-
-class Null_Decompressor:
-    def feed(self, s):
-        return s
-
-    def flush(self):
-        return b''
-
-
-class Deflate_Decompressor:
-    def __init__(self):
-        self._adler32 = zlib.adler32(b'')
-        self._raw_deflate = False
-
-        self._decompress = zlib.decompressobj()
-        self._buffer = b''
-
-        self._state_feed = Deflate_Decompressor._feed_header
-
-    def _update_adler32(self, data):
-        self._adler32 = zlib.adler32(data, self._adler32)
-
-
-    def feed(self, s):
-        self._buffer = self._buffer + s
-        data = b''
-
-        while self._state_feed and len(self._buffer):
-            res = self._state_feed(self)
-
-            if res:
-                self._update_adler32(res)
-                data += res
-
-            if res != None:
-                break
-
-        return data
-
-    def flush(self):
-        data = b''
-
-        while self._state_feed:
-            res = self._state_feed(self)
-
-            if res:
-                self._update_adler32(res)
-                data += res
-            elif res == b'' and self._state_feed != None:
-                raise IOError('premature EOF')
-
-        if len(self._buffer):
-            raise IOError('extra data at end of compressed data')
-
-        return data
-
-
-    def _feed_header(self):
-        if len(self._buffer) >= 2:
-            header = self._buffer[:2]
-            header_int = struct.unpack('>H', header)[0]
-            if header_int % 31 != 0:
-                self._raw_deflate = True
-                self._buffer = b'\x78\x9c' + self._buffer
-
-            self._state_feed = Deflate_Decompressor._feed_data
-            return None
-
-        # need more data
-        return b''
-
-    def _feed_data(self):
-        if len(self._buffer) > 0:
-            data = self._decompress.decompress(self._buffer)
-            self._buffer = self._decompress.unused_data
-        else:
-            data = self._decompress.flush()
-            self._buffer = self._decompress.unused_data
-            self._state_feed = Deflate_Decompressor._feed_eof
-
-            if not data:
-                return None
-
-        if self._buffer:
-            self._state_feed = Deflate_Decompressor._feed_eof
-            if not data:
-                return None
-
-        return data
-
-    def _feed_eof(self):
-        self._state_feed = None
-        return b''
-
-
-class Gzip_Decompressor:
-    FTEXT, FHCRC, FEXTRA, FNAME, FCOMMENT = 1, 2, 4, 8, 16
-
-    def __init__(self):
-        self._crc = zlib.crc32(b'')
-        self._size = 0
-
-        self._decompress = zlib.decompressobj(-zlib.MAX_WBITS)
-        self._header_flag = 0
-        self._buffer = b''
-
-        self._state_feed = Gzip_Decompressor._feed_header_static
-
-    def _update_crc32(self, data):
-        self._crc = zlib.crc32(data, self._crc)
-        self._size = self._size + len(data)
-
-    def feed(self, s):
-        self._buffer = self._buffer + s
-        data = b''
-
-        while self._state_feed and len(self._buffer):
-            res = self._state_feed(self)
-
-            if res:
-                self._update_crc32(res)
-                data += res
-
-            if res != None:
-                break
-
-        return data
-
-    def flush(self):
-        data = b''
-
-        while self._state_feed:
-            res = self._state_feed(self)
-
-            if res:
-                self._update_crc32(res)
-                data += res
-            elif res == b'' and self._state_feed != None:
-                raise IOError('premature EOF')
-
-        if len(self._buffer):
-            raise IOError('extra data at end of compressed data')
-
-        return data
-
-    def _feed_header_static(self):
-        if len(self._buffer) >= 10:
-            magic = self._buffer[:2]
-            if magic != b'\037\213':
-                raise IOError('Not a gzipped file')
-            method = ord(self._buffer[2:3])
-            if method != 8:
-                raise IOError('Unknown compression method')
-            self._header_flag = ord(self._buffer[3:4])
-            # modtime = self.fileobj.read(4)
-            # extraflag = self.fileobj.read(1)
-            # os = self.fileobj.read(1)
-            self._buffer = self._buffer[10:]
-
-            self._state_feed = Gzip_Decompressor._feed_header_flags
-            return None
-
-        # need more data
-        return b''
-
-    def _feed_header_flags(self):
-        if self._header_flag & Gzip_Decompressor.FEXTRA:
-            if len(self._buffer) >= 2:
-                # Read & discard the extra field, if present
-                xlen = struct.unpack('<H', self._buffer[:2])[0]
-                if len(self._buffer) >= (2 + xlen):
-                    self._buffer = self._buffer[2 + xlen:]
-                    self._header_flag = self._header_flag & ~Gzip_Decompressor.FEXTRA
-                    return None
-        elif self._header_flag & Gzip_Decompressor.FNAME:
-            # Read and discard a null-terminated string containing the filename
-            pos = self._buffer.find(b'\0')
-            if pos != -1:
-                self._buffer = self._buffer[pos + 1:]
-                self._header_flag = self._header_flag & ~Gzip_Decompressor.FNAME
-                return None
-        elif self._header_flag & Gzip_Decompressor.FCOMMENT:
-            # Read and discard a null-terminated string containing a comment
-            pos = self._buffer.find(b'\0')
-            if pos != -1:
-                self._buffer = self._buffer[pos + 1:]
-                self._header_flag = self._header_flag & ~Gzip_Decompressor.FCOMMENT
-                return None
-        elif self._header_flag & Gzip_Decompressor.FHCRC:
-            if len(self._buffer) >= 2:
-                self._buffer = self._buffer[2:]
-                self._header_flag = self._header_flag & ~Gzip_Decompressor.FHCRC
-                return None
-        else:
-            self._state_feed = Gzip_Decompressor._feed_data
-            return None
-
-        # need more data
-        return b''
-
-    def _feed_data(self):
-        if len(self._buffer) > 0:
-            data = self._decompress.decompress(self._buffer)
-            self._buffer = self._decompress.unused_data
-        else:
-            data = self._decompress.flush()
-            self._buffer = self._decompress.unused_data
-            self._state_feed = Gzip_Decompressor._feed_eof
-
-            if not data:
-                return None
-
-        if self._buffer:
-            self._state_feed = Gzip_Decompressor._feed_eof
-            if not data:
-                return None
-
-        return data
-
-    def _feed_eof(self):
-        if len(self._buffer) >= 8:
-            crc32, isize = struct.unpack('<ll', self._buffer[:8])
-            if crc32 % 0x100000000 != self._crc % 0x100000000:
-                raise DecompressorError('CRC check failed')
-            elif isize != self._size:
-                raise DecompressorError('Incorrect length of data produced')
-
-            self._buffer = self._buffer[8:]
-            self._state_feed = None
-        return b''
 
 
 class FeedError(Exception):
@@ -1146,14 +831,14 @@ class Feed_Parser:
                 raise FeedError('No RSS autodiscovery links found in html')
 
 
-    def __init__(self, base_url):
+    def __init__(self, base_url, encoding):
         self.__buf = []
         self.__base_url = base_url
         self.__handler = Feed_Parser.Handler()
         if hasattr(XMLParser, 'feed_error_log'):
-            self.__parser = XMLParser(target=self.__handler, recover=True)
+            self.__parser = XMLParser(target=self.__handler, recover=True, encoding=encoding)
         else:
-            self.__parser = XMLParser(target=self.__handler)
+            self.__parser = XMLParser(target=self.__handler, encoding=encoding)
 
 
     def get_error_log(self):
@@ -1400,6 +1085,9 @@ class RSS_Resource:
             # expect the worst, will be reset later
             self._invalid_since = now
 
+        sess = requests.Session()
+        sess.headers.update({ 'User-Agent' :
+                              'JabRSS (http://jabrss.cmeerw.org)' })
 
         redirect_penalty = 0
         redirect_tries = redirect_count
@@ -1407,10 +1095,6 @@ class RSS_Resource:
         redirect_resource = None
         redirect_seq = None
         redirects = []
-
-        http_conn = None
-        http_protocol = None
-        http_host = None
 
         with Cursor(db) as cursor:
             try:
@@ -1448,62 +1132,20 @@ class RSS_Resource:
                             break
 
 
-                    if RSS_Resource.http_proxy and (url_protocol == 'http'):
-                        host = RSS_Resource.http_proxy
-                        request = 'http://' + url_host + url_path
-                    else:
-                        host = url_host
-                        request = url_path
-
-                    if url_protocol == 'http' and http_protocol == url_protocol and http_host == host and http_conn != None:
-                        conn_reused = True
-                        h = http_conn
-                    else:
-                        conn_reused = False
-                        if url_protocol == 'https':
-                            h = HTTPSConnection(host,
-                                                timeout=self._connect_timeout,
-                                                read_timeout=self._timeout)
-                        else:
-                            h = HTTPConnection(host,
-                                               timeout=self._connect_timeout,
-                                               read_timeout=self._timeout)
-
-                    http_protocol = url_protocol
-                    http_host = host
-                    http_conn = None
-                    try:
-                        h.putrequest('GET', request)
-
-                        if conn_reused:
-                            logger.debug('reused HTTP connection')
-                    except httplib.CannotSendRequest:
-                        logger.warn('caught CannotSendRequest, opening new connection')
-
-                        if not conn_reused:
-                            raise
-
-                        h = HTTPConnection(host)
-                        h.putrequest('GET', request)
-
-                    if not RSS_Resource.http_proxy:
-                        h.putheader('Host', url_host)
-                    h.putheader('Connection', 'Keep-Alive')
-                    h.putheader('Pragma', 'no-cache')
-                    h.putheader('Cache-Control', 'no-cache')
-                    h.putheader('Accept-Encoding', 'gzip, deflate, identity')
-                    h.putheader('User-Agent', 'JabRSS (http://jabrss.cmeerw.org)')
+                    headers = {}
                     if self._last_modified:
-                        h.putheader('If-Modified-Since',
-                                    formatdate(self._last_modified, usegmt=True))
+                        headers['If-Modified-Since'] = formatdate(self._last_modified, usegmt=True)
                     if self._etag != None:
-                        h.putheader('If-None-Match', self._etag)
-                    h.endheaders()
-                    response = h.getresponse()
+                        headers['If-None-Match'] = self._etag
 
-                    errcode = response.status
+                    response = sess.get('%s://%s%s' % (url_protocol, url_host,
+                                                       url_path),
+                                        allow_redirects=False, stream=True,
+                                        timeout=self._connect_timeout)
+
+                    errcode = response.status_code
                     errmsg = response.reason
-                    headers = response.msg
+                    headers = response.headers
 
                     # check the error code
                     # handle "304 Not Modified"
@@ -1513,39 +1155,16 @@ class RSS_Resource:
                     elif (errcode >= 200) and (errcode < 300):
                         feed_xml_downloaded = True
 
-                        self._last_modified = parse_Rfc822DateTime(headers.get('last-modified', None))
+                        self._last_modified, self._etag = parse_Rfc822DateTime(headers.get('last-modified', None)), headers.get('etag', None)
 
-                        try:
-                            self._etag = headers['etag']
-                        except:
-                            self._etag = None
-
-                        content_encoding = headers.get('content-encoding', None)
-                        transfer_encoding = headers.get('transfer-encoding', None)
-
-                        if (content_encoding == 'gzip') or (transfer_encoding == 'gzip'):
-                            logger.debug('gzip-encoded data')
-                            decoder = Gzip_Decompressor()
-                        elif (content_encoding == 'deflate') or (transfer_encoding == 'deflate'):
-                            logger.debug('deflate-encoded data')
-                            decoder = Deflate_Decompressor()
-                        else:
-                            decoder = Null_Decompressor()
-
-                        rss_parser = Feed_Parser((self._url_protocol, self._url_host, self._url_path))
+                        rss_parser = Feed_Parser((self._url_protocol, self._url_host, self._url_path), response.encoding)
 
                         bytes_received = 0
                         bytes_processed = 0
                         xml_started = False
                         file_hash = hashlib.md5()
 
-                        l = response.read(4096)
-                        while l:
-                            bytes_received = bytes_received + len(l)
-                            if bytes_received > 768 * 1024:
-                                raise ValueError('file exceeds maximum allowed size')
-
-                            data = decoder.feed(l)
+                        for data in response.iter_content(4096):
                             file_hash.update(data)
 
                             if not xml_started:
@@ -1559,13 +1178,7 @@ class RSS_Resource:
 
                             rss_parser.feed(data)
 
-                            l = response.read(4096)
-
                         response.close()
-                        h.close()
-                        data = decoder.flush()
-                        file_hash.update(data)
-                        rss_parser.feed(data)
                         rss_parser.close()
 
                         redirect_url = rss_parser.get_redirect_url()
@@ -1597,18 +1210,12 @@ class RSS_Resource:
                     # "307 Temporary Redirect"
                     elif (errcode >= 300) and (errcode < 400):
                         bytes_received = 0
-                        l = response.read(4096)
-                        while l:
-                            bytes_received = bytes_received + len(l)
+                        for data in response.iter_content(4096):
+                            bytes_received = bytes_received + len(data)
                             if bytes_received > 128 * 1024:
                                 raise ValueError('file exceeds maximum allowed size')
 
-                            l = response.read(4096)
-
                         response.close()
-                        if not response.will_close:
-                            # maybe we can reuse the connection
-                            http_conn = h
 
                         if errcode != 301:
                             redirect_permanent = False
@@ -1632,18 +1239,14 @@ class RSS_Resource:
                     error_info = 'redirect: maximum number of redirects exceeded'
             except socket.timeout as e:
                 error_info = 'timeout: ' + str(e)
+            except requests.exceptions.HTTPError as e:
+                error_info = 'HTTP: ' + str(e)
+            except requests.exceptions.ConnectionError as e:
+                error_info = 'HTTP connection: ' + str(e)
             except socket.error as e:
                 error_info = 'socket: ' + str(e)
             except IOError as e:
                 error_info = 'I/O error: ' + str(e)
-            except httplib.BadStatusLine as e:
-                error_info = 'HTTP: bad status line'
-            except httplib.IncompleteRead as e:
-                error_info = 'HTTP: incomplete read'
-            except httplib.UnknownProtocol as e:
-                error_info = 'HTTP: unknown protocol'
-            except httplib.HTTPException as e:
-                error_info = 'HTTP: ' + str(e)
             except FeedError as e:
                 error_info = 'feed: ' + str(e)
             except AssertionError as e:
