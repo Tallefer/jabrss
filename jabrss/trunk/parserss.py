@@ -1157,7 +1157,14 @@ class RSS_Resource:
 
                         self._last_modified, self._etag = parse_Rfc822DateTime(headers.get('last-modified', None)), headers.get('etag', None)
 
-                        rss_parser = Feed_Parser((self._url_protocol, self._url_host, self._url_path), response.encoding)
+                        # only use an encoding if it has been explicitly specified
+                        charset = list(filter(lambda s: s.startswith('charset='), [ s.strip() for s in headers.get('content-type', '').split(';')[1:] ]))[:1]
+                        if charset:
+                            encoding = charset[0][len('charset='):]
+                        else:
+                            encoding = None
+
+                        rss_parser = Feed_Parser((self._url_protocol, self._url_host, self._url_path), encoding)
 
                         bytes_received = 0
                         bytes_processed = 0
