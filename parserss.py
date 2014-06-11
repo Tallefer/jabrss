@@ -163,23 +163,6 @@ def split_url(url):
         if len(host[-1]) >= 2 and host[-1].isalpha():
             validhost = True
 
-            def encode_puny(s):
-                if s.startswith('xn--'):
-                    for c in s:
-                        if not c.isalnum() and c != '-':
-                            raise UrlError('invalid host in URL')
-                    return s
-                elif len(s):
-                    c = (b''.decode('ascii') + s).encode('punycode').decode('ascii')
-                    if c[-1] != '-':
-                        return 'xn--%s' % (c,)
-                    else:
-                        return s
-                else:
-                    raise UrlError('invalid host in URL')
-
-            host = list(map(encode_puny, host[:-1])) + [host[-1]]
-
     if not validhost:
         raise UrlError('invalid host in URL "%s"' % ('.'.join(host),))
 
