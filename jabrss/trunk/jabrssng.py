@@ -2022,6 +2022,8 @@ class JabRSSStream(XmppStream):
 
                     if used:
                         reslock.unlock()
+                        redirect_resource = None
+
                         try:
                             log_message(time.asctime(), 'updating', resource.url())
                             new_items, next_item_id, redirect_resource, redirect_seq, redirects = resource.update(res_db, redirect_cb = storage._redirect_cb)

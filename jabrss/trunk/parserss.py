@@ -1241,8 +1241,6 @@ class RSS_Resource:
                 error_info = 'feed: ' + str(e)
             except AssertionError as e:
                 error_info = 'assertion: ' + str(e)
-            except DecompressorError as e:
-                error_info = 'decompressor: ' + str(e)
             except UnicodeError as e:
                 error_info = 'encoding: ' + str(e)
             except LookupError as e:
