@@ -1124,7 +1124,8 @@ class RSS_Resource:
                     response = sess.get('%s://%s%s' % (url_protocol, url_host,
                                                        url_path),
                                         allow_redirects=False, stream=True,
-                                        timeout=self._connect_timeout)
+                                        timeout=self._connect_timeout,
+                                        verify=False)
 
                     errcode = response.status_code
                     errmsg = response.reason
