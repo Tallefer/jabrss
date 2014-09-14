@@ -704,6 +704,8 @@ class Feed_Parser:
                 title = htmlelem2plain(channel.find(ns + 'title'))
                 descr = htmlelem2plain(channel.find(ns + 'description'))
                 link = channel.findtext(ns + 'link')
+                if link:
+                    link = link.strip()
                 guid = channel.get('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about', None)
                 published = parse_dateTime(channel.findtext('{http://purl.org/dc/elements/1.1/}date')) or \
                     parse_Rfc822DateTime(channel.findtext(ns + 'lastBuildDate')) or \
@@ -732,6 +734,8 @@ class Feed_Parser:
 
             if link == None:
                 link = ''
+            else:
+                link = link.strip()
 
             guid = elem.get('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about', None) or \
                 elem.findtext(ns + 'guid')
@@ -761,9 +765,9 @@ class Feed_Parser:
         def rss11_end(self, elem):
             ns = '{http://purl.org/net/rss1.1#}'
 
-            title = elem.findtext(ns + 'title') or ''
-            descr = elem.findtext(ns + 'description') or ''
-            link = elem.findtext(ns + 'link') or ''
+            title = (elem.findtext(ns + 'title') or '').strip()
+            descr = (elem.findtext(ns + 'description') or '').strip()
+            link = (elem.findtext(ns + 'link') or '').strip()
             guid = None
             published = None
 
@@ -773,9 +777,9 @@ class Feed_Parser:
         def rss11_entry(self, elem):
             ns = '{http://purl.org/net/rss1.1#}'
 
-            title = elem.findtext(ns + 'title') or ''
-            descr = elem.findtext(ns + 'description') or ''
-            link = elem.findtext(ns + 'link') or ''
+            title = (elem.findtext(ns + 'title') or '').strip()
+            descr = (elem.findtext(ns + 'description') or '').strip()
+            link = (elem.findtext(ns + 'link') or '').strip()
             guid = elem.get('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about', None)
             published = None
 
