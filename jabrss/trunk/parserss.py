@@ -99,6 +99,7 @@ class Null_Synchronizer:
 INTERVAL_DIVIDER = 3
 MIN_INTERVAL = 45*60
 MAX_INTERVAL = 24*60*60
+MAX_XML_SIZE = 4 * 1024 * 1024
 DB_FILENAME = 'parserss.db'
 
 def init_parserss(db_fname = DB_FILENAME,
@@ -1168,7 +1169,7 @@ class RSS_Resource:
                                     xml_started = True
 
                             bytes_processed = bytes_processed + len(data)
-                            if bytes_processed > 2 * 1024 * 1024:
+                            if bytes_processed > MAX_XML_SIZE:
                                 raise ValueError('file exceeds maximum allowed decompressed size')
 
                             rss_parser.feed(data)
