@@ -910,7 +910,7 @@ def default_redirect_cb(redirect_url, db, redirect_count,
 
 @functools.total_ordering
 class RSS_Resource:
-    NR_ITEMS = 64
+    NR_ITEMS = 96
 
     _db_sync = Null_Synchronizer()
     http_proxy = None
