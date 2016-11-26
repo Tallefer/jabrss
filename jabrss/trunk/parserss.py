@@ -36,11 +36,11 @@ except ImportError:
 from contenttools import htmlelem2plain, html2plain, xml2plain
 
 if sys.version_info[0] == 2:
-    from HTMLParser import HTMLParser, HTMLParseError
+    from HTMLParser import HTMLParser
     from StringIO import StringIO
     from urlparse import urlsplit, urljoin
 else:
-    from html.parser import HTMLParser, HTMLParseError
+    from html.parser import HTMLParser
     from io import StringIO
     from urllib.parse import urlsplit, urljoin
     unichr = chr
@@ -1253,8 +1253,6 @@ class RSS_Resource:
                 error_info = 'encoding: ' + str(e)
             except ValueError as e:
                 error_info = 'misc: ' + str(e)
-            except HTMLParseError as e:
-                error_info = 'html: ' + str(e)
             except:
                 traceback.print_exc(file=sys.stdout)
 
