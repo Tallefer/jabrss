@@ -152,12 +152,14 @@ class UrlRewriter(NullRewriter):
 
             for pattern, repl in self.__db.cursor().execute('SELECT pattern, replacement FROM host_rule WHERE hostname=?', (host,)):
                 if pattern[0] == '/':
-                    pattern = 'http://[^/]+' + pattern
+                    pattern = 'https?://[^/]+' + pattern
 
                 mo = re.match(pattern_to_regex(pattern), loc)
                 if mo:
                     repl = replace_captures(repl, mo)
-                    if repl[0] == '/':
+                    if repl.startsWith('//'):
+                        loc = url.scheme + ':' + repl
+                    if repl.startsWith('/'):
                         loc = url.scheme + '://' + host + repl
                     else:
                         loc = repl
