@@ -159,7 +159,7 @@ class UrlRewriter(NullRewriter):
                     repl = replace_captures(repl, mo)
                     if repl.startswith('//'):
                         loc = url.scheme + ':' + repl
-                    if repl.startswith('/'):
+                    elif repl.startswith('/'):
                         loc = url.scheme + '://' + host + repl
                     else:
                         loc = repl
