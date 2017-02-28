@@ -34,9 +34,9 @@ The complete source code is available from the JabRSS repository ( http://svn.cm
 
 * `set store_messages` <`number`> -- store at most the specified number of messages for later delivery (note that there is a hard limit of 48, default is 16)
 
-* `set header` [`Title`] [`URL`] -- include an optional header line in headline notifications with the title and/or URL of the feed (default is title)
+* `set header` [`Title`] [`URL`] -- include an optional header line in headline notifications with the title and/or URL of the feed (default is empty)
 
-* `set subject` [`Title`] [`URL`] -- include an optional subject in headline notifications with the title and/or URL of the feed (default is empty)
+* `set subject` [`Title`] [`URL`] -- include an optional subject in headline notifications with the title and/or URL of the feed (default is title)
 
 * `configuration` -- displays your current configuration
 
